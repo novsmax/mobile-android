@@ -91,7 +91,6 @@ fun WorkoutHomeScreen(
             WorkoutTab.MENU    -> MenuScreen(
                 padding = padding,
                 onNavigateToProfile = onNavigateToProfile,
-                onLogout = onLogout,
             )
         }
     }

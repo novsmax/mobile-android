@@ -49,7 +49,6 @@ private val ColorAchievementIcon3 = Color(0xFFCD7F32)
 fun MenuScreen(
     padding: PaddingValues,
     onNavigateToProfile: () -> Unit,
-    onLogout: () -> Unit,
 ) {
     Column(
         modifier = Modifier
