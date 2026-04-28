@@ -4,6 +4,7 @@ import android.util.Log
 import com.example.smarttracker.data.cache.RoleGoalCache
 import com.example.smarttracker.data.local.RoleConfigStorage
 import com.example.smarttracker.data.local.TokenStorage
+import com.example.smarttracker.data.local.UserProfileCache
 import com.example.smarttracker.data.remote.AuthApiService
 import com.example.smarttracker.data.remote.dto.EmailVerificationDto
 import com.example.smarttracker.data.remote.dto.LoginRequestDto
@@ -43,6 +44,7 @@ import javax.inject.Inject
 class AuthRepositoryImpl @Inject constructor(
     private val api: AuthApiService,
     private val tokenStorage: TokenStorage,
+    private val userProfileCache: UserProfileCache,
     private val roleGoalCache: RoleGoalCache,
     private val roleConfigStorage: RoleConfigStorage,
 ) : AuthRepository {
@@ -222,9 +224,22 @@ class AuthRepositoryImpl @Inject constructor(
     /**
      * Профиль текущего пользователя: вес, рост, дата рождения, пол.
      * Используется WorkoutStartViewModel для расчёта калорий методом MET.
+     *
+     * Стратегия cache-first:
+     * 1. Проверяем локальный кэш (EncryptedSharedPreferences).
+     * 2. Если кэш есть — возвращаем мгновенно, без сетевого запроса.
+     * 3. Если кэш пуст — идём в сеть, сохраняем результат в кэш.
+     *
+     * Кэш прогревается при входе в аккаунт (LoginViewModel / RegisterViewModel).
+     * Сбрасывается при выходе (AppViewModel.logout).
      */
-    override suspend fun getUserInfo(): Result<User> =
-        runCatching { api.getUserInfo().toDomain() }
+    override suspend fun getUserInfo(): Result<User> = runCatching {
+        userProfileCache.get()?.let { return Result.success(it) }
+
+        val user = api.getUserInfo().toDomain()
+        userProfileCache.save(user)
+        user
+    }
 
     /**
      * Делегирует в TokenStorage.sessionExpiredFlow.

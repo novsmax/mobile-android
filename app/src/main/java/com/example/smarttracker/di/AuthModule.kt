@@ -7,6 +7,8 @@ import com.example.smarttracker.data.local.RoleConfigStorage
 import com.example.smarttracker.data.local.RoleConfigStorageImpl
 import com.example.smarttracker.data.local.TokenStorage
 import com.example.smarttracker.data.local.TokenStorageImpl
+import com.example.smarttracker.data.local.UserProfileCache
+import com.example.smarttracker.data.local.UserProfileCacheImpl
 import com.example.smarttracker.data.local.db.ActivityTypeDao
 import com.example.smarttracker.data.local.db.ActivityTypeEntity
 import com.example.smarttracker.data.local.db.GpsPointDao
@@ -51,6 +53,10 @@ abstract class AuthModule {
     @Binds
     @Singleton
     abstract fun bindRoleConfigStorage(impl: RoleConfigStorageImpl): RoleConfigStorage
+
+    @Binds
+    @Singleton
+    abstract fun bindUserProfileCache(impl: UserProfileCacheImpl): UserProfileCache
 
     @Binds
     @Singleton

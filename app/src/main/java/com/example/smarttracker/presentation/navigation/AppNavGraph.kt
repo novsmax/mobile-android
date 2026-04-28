@@ -20,6 +20,8 @@ import com.example.smarttracker.presentation.auth.register.RegisterEvent
 import com.example.smarttracker.presentation.auth.register.RegisterScreen
 import com.example.smarttracker.presentation.auth.register.RegisterViewModel
 import com.example.smarttracker.presentation.auth.register.TermsOfServiceScreen
+import com.example.smarttracker.presentation.menu.profile.ProfileScreen
+import com.example.smarttracker.presentation.menu.profile.ProfileViewModel
 import com.example.smarttracker.presentation.workout.WorkoutHomeScreen
 
 /** Compose NavHost: декларация всех маршрутов и переходов между экранами. */
@@ -167,6 +169,27 @@ fun AppNavGraph(
                     onLogout()
                     // Очищаем весь бэкстек до корня и переходим на Login,
                     // чтобы кнопка «Назад» не возвращала на Home после выхода.
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateToProfile = {
+                    navController.navigate(Screen.Profile.route)
+                },
+            )
+        }
+
+        composable(Screen.Profile.route) {
+            val viewModel: ProfileViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsStateWithLifecycle()
+
+            ProfileScreen(
+                state = state,
+                onBack = { navController.popBackStack() },
+                onLogout = {
+                    onLogout()
+                    // Очищаем весь стек и идём на Login — аналогично выходу из Home
                     navController.navigate(Screen.Login.route) {
                         popUpTo(navController.graph.id) { inclusive = true }
                         launchSingleTop = true

@@ -22,6 +22,7 @@ import com.example.smarttracker.domain.model.SaveTrainingResult
 import com.example.smarttracker.domain.model.TrainingAlreadyClosedException
 import com.example.smarttracker.domain.model.WorkoutType
 import com.example.smarttracker.domain.repository.WorkoutRepository
+
 import retrofit2.HttpException
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -139,6 +140,11 @@ class WorkoutRepositoryImpl @Inject constructor(
     override suspend fun getMETActivity(typeActivId: Int): Result<METActivity> =
         runCatching {
             trainingApi.getMETActivity(typeActivId).toDomain()
+        }
+
+    override suspend fun getTrainingHistory(): Result<List<com.example.smarttracker.domain.model.TrainingHistoryItem>> =
+        runCatching {
+            trainingApi.getTrainingHistory().map { it.toDomain() }
         }
 
     override suspend fun savePendingFinish(

@@ -6,6 +6,7 @@ import com.example.smarttracker.domain.model.METActivity
 import com.example.smarttracker.domain.model.SaveTrainingResult
 import com.example.smarttracker.domain.model.WorkoutType
 import kotlinx.coroutines.flow.Flow
+import com.example.smarttracker.domain.model.TrainingHistoryItem
 
 /**
  * Контракт репозитория тренировок.
@@ -81,6 +82,12 @@ interface WorkoutRepository {
      * @param typeActivId идентификатор типа активности
      */
     suspend fun getMETActivity(typeActivId: Int): Result<METActivity>
+
+    /**
+     * Получить историю тренировок пользователя (список последних тренировок).
+     * Возвращает список элементов истории; пустой список если записей нет.
+     */
+    suspend fun getTrainingHistory(): Result<List<TrainingHistoryItem>>
 
     /**
      * Сохранить параметры завершения тренировки в локальную очередь.

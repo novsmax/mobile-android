@@ -1,0 +1,20 @@
+package com.example.smarttracker.domain.model
+
+import java.time.LocalDate
+
+/**
+ * Элемент истории тренировки, получаемый с эндпоинта GET /training/history.
+ *
+ * Поля соответствуют API. Для UI нам нужна только [date] в виде [LocalDate].
+ */
+data class TrainingHistoryItem(
+    val trainingId: String,
+    val typeActivId: Int,
+    val date: LocalDate,
+    val timeStart: String?,
+    val timeEnd: String?,
+    val kilocalories: Double?,
+    val distanceM: Double?,
+    val avgSpeed: Double?,
+)
+
