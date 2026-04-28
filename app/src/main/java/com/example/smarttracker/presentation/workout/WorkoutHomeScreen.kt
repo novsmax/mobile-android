@@ -1,16 +1,8 @@
 package com.example.smarttracker.presentation.workout
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,20 +13,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.smarttracker.R
+import com.example.smarttracker.presentation.common.AppTab
+import com.example.smarttracker.presentation.common.SmartTrackerBottomBar
+import com.example.smarttracker.presentation.menu.MenuScreen
 import com.example.smarttracker.presentation.theme.ColorPrimary
-import com.example.smarttracker.presentation.theme.ColorSecondary
 import com.example.smarttracker.presentation.theme.geologicaFontFamily
-import com.example.smarttracker.presentation.workout.menu.MenuScreen
 import com.example.smarttracker.presentation.workout.start.WorkoutStartScreen
 import com.example.smarttracker.presentation.workout.start.WorkoutStartViewModel
 
@@ -73,9 +63,10 @@ fun WorkoutHomeScreen(
 
     Scaffold(
         bottomBar = {
-            WorkoutBottomBar(
-                currentTab = currentTab,
-                onTabSelected = { currentTab = it },
+            // Используем общий компонент; ordinal совпадает с AppTab.START/WORKOUTS/MENU
+            SmartTrackerBottomBar(
+                selectedIndex = currentTab.ordinal,
+                onTabSelected = { currentTab = WorkoutTab.entries[it] },
             )
         },
     ) { padding ->
@@ -106,64 +97,10 @@ fun WorkoutHomeScreen(
     }
 }
 
-// ── Нижний бар ────────────────────────────────────────────────────────────────
+// ── Вкладки главного экрана ───────────────────────────────────────────────────
+// Порядок должен совпадать с AppTab.START/WORKOUTS/MENU (используется .ordinal)
 
 private enum class WorkoutTab { START, WORKOUTS, MENU }
-
-@Composable
-private fun WorkoutBottomBar(
-    currentTab: WorkoutTab,
-    onTabSelected: (WorkoutTab) -> Unit,
-) {
-    androidx.compose.foundation.layout.Column {
-        HorizontalDivider(color = ColorPrimary, thickness = 1.dp)
-        NavigationBar(containerColor = Color.White) {
-
-            // Все три вкладки имеют одинаковое поведение:
-            // при выборе — иконка обёрнута в бирюзовый круг, цвет иконки остаётся тёмным
-            listOf(
-                Triple(WorkoutTab.START,    R.drawable.ic_nav_start,    stringResource(R.string.tab_start)),
-                Triple(WorkoutTab.WORKOUTS, R.drawable.ic_nav_workouts, stringResource(R.string.tab_workouts)),
-                Triple(WorkoutTab.MENU,     R.drawable.ic_nav_menu,     stringResource(R.string.tab_menu)),
-            ).forEach { (tab, iconRes, label) ->
-            NavigationBarItem(
-                selected = currentTab == tab,
-                onClick = { onTabSelected(tab) },
-                icon = {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                color = if (currentTab == tab) ColorSecondary else Color.Transparent,
-                                shape = CircleShape,
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(iconRes),
-                            contentDescription = label,
-                            tint = ColorPrimary,
-                            modifier = Modifier.size(38.dp),
-                        )
-                    }
-                },
-                label = {
-                    Text(
-                        text = label,
-                        fontFamily = geologicaFontFamily,
-                        fontWeight = FontWeight.Light,
-                        fontSize = 14.sp,
-                        color = ColorPrimary,
-                    )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                    indicatorColor = Color.Transparent,
-                ),
-            )
-            }
-        }
-    }
-}
 
 // ── Заглушка для незаконченных вкладок ────────────────────────────────────────
 

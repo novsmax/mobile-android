@@ -20,7 +20,8 @@ import com.example.smarttracker.presentation.auth.register.RegisterEvent
 import com.example.smarttracker.presentation.auth.register.RegisterScreen
 import com.example.smarttracker.presentation.auth.register.RegisterViewModel
 import com.example.smarttracker.presentation.auth.register.TermsOfServiceScreen
-import com.example.smarttracker.presentation.profile.ProfileScreen
+import com.example.smarttracker.presentation.menu.profile.ProfileScreen
+import com.example.smarttracker.presentation.menu.profile.ProfileViewModel
 import com.example.smarttracker.presentation.workout.WorkoutHomeScreen
 
 /** Compose NavHost: декларация всех маршрутов и переходов между экранами. */
@@ -180,7 +181,21 @@ fun AppNavGraph(
         }
 
         composable(Screen.Profile.route) {
-            ProfileScreen(onBack = { navController.popBackStack() })
+            val viewModel: ProfileViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsStateWithLifecycle()
+
+            ProfileScreen(
+                state = state,
+                onBack = { navController.popBackStack() },
+                onLogout = {
+                    onLogout()
+                    // Очищаем весь стек и идём на Login — аналогично выходу из Home
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
         }
     }
 }

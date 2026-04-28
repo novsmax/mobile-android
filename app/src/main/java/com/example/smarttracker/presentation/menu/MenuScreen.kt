@@ -1,4 +1,4 @@
-package com.example.smarttracker.presentation.workout.menu
+package com.example.smarttracker.presentation.menu
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
