@@ -1,6 +1,7 @@
 package com.example.smarttracker.data.remote
 
 import com.example.smarttracker.data.remote.dto.ActiveTrainingResponseDto
+import com.example.smarttracker.data.remote.dto.TrainingHistoryResponseDto
 import com.example.smarttracker.data.remote.dto.GpsPointsBatchRequestDto
 import com.example.smarttracker.data.remote.dto.GpsPointsSaveResponseDto
 import com.example.smarttracker.data.remote.dto.METActivityResponseDto
@@ -69,6 +70,13 @@ interface TrainingApiService {
      */
     @GET("training/met/{type_activ_id}")
     suspend fun getMETActivity(@Path("type_activ_id") typeActivId: Int): METActivityResponseDto
+
+    /**
+     * Получить историю тренировок текущего пользователя.
+     * Возвращает массив элементов истории (может быть пустым).
+     */
+    @GET("training/history")
+    suspend fun getTrainingHistory(): List<TrainingHistoryResponseDto>
 
     /**
      * Удалить тренировку (тестовый эндпоинт).
