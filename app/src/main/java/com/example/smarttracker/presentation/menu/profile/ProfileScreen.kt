@@ -51,7 +51,6 @@ import com.example.smarttracker.presentation.theme.geologicaFontFamilyItalic
  * как [ProfileUiState]. Пока идёт загрузка — показывается [CircularProgressIndicator].
  *
  * Кнопка «Ред.» нефункциональна (MVP).
- * Дата последней тренировки — заглушка до появления API истории тренировок.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
