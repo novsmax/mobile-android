@@ -2,6 +2,7 @@ package com.example.smarttracker.presentation
 
 import androidx.lifecycle.ViewModel
 import com.example.smarttracker.data.local.TokenStorage
+import com.example.smarttracker.data.local.UserProfileCache
 import com.example.smarttracker.presentation.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -22,6 +23,7 @@ import javax.inject.Inject
 @HiltViewModel
 class AppViewModel @Inject constructor(
     private val tokenStorage: TokenStorage,
+    private val userProfileCache: UserProfileCache,
 ) : ViewModel() {
 
     /**
@@ -32,10 +34,14 @@ class AppViewModel @Inject constructor(
         if (tokenStorage.hasTokens()) Screen.Home.route else Screen.Login.route
 
     /**
-     * Очищает все токены и роли.
+     * Очищает токены, роли и кэш профиля.
      * Навигация на Login выполняется в AppNavGraph после вызова этой функции.
+     *
+     * Очищаем оба хранилища атомарно: если токены удалены, профиль
+     * другого пользователя не должен показаться при следующем входе.
      */
     fun logout() {
         tokenStorage.clearAll()
+        userProfileCache.clear()
     }
 }

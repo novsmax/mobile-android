@@ -363,6 +363,9 @@ class RegisterViewModel @Inject constructor(
             authRepository.verifyEmail(s.email, s.verificationCode)
                 .onSuccess {
                     cooldownJob?.cancel()
+                    // Прогреваем кэш профиля до навигации на Home.
+                    // Ошибка здесь не блокирует завершение регистрации.
+                    runCatching { authRepository.getUserInfo() }
                     _state.update { it.copy(isLoading = false) }
                     _events.emit(RegisterEvent.NavigateToHome)
                 }
