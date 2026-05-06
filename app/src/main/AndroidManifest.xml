@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Доступ к интернету для Retrofit -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -51,6 +52,25 @@
             android:foregroundServiceType="location"
             android:stopWithTask="false"
             android:exported="false" />
+
+        <!--
+            Отключаем автоматическую инициализацию WorkManager через androidx.startup.
+            Без этого WorkManagerInitializer запускается ДО Application.onCreate() и создаёт
+            WorkManager с дефолтной WorkerFactory — @HiltWorker/@AssistedInject-воркеры
+            получают NoSuchMethodException при инстанциировании.
+            При наличии Configuration.Provider в SmartTrackerApp WorkManager инициализируется
+            лениво при первом вызове WorkManager.getInstance(context) с нашей HiltWorkerFactory.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
     </application>
 
