@@ -2,6 +2,8 @@ package com.example.smarttracker.data.local.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Единственная Room-база данных приложения.
@@ -18,11 +20,33 @@ import androidx.room.RoomDatabase
  */
 @Database(
     entities = [GpsPointEntity::class, ActivityTypeEntity::class, PendingFinishEntity::class],
-    version = 5,
+    version = 7,
     exportSchema = false
 )
 abstract class SmartTrackerDatabase : RoomDatabase() {
     abstract fun gpsPointDao(): GpsPointDao
     abstract fun activityTypeDao(): ActivityTypeDao
     abstract fun pendingFinishDao(): PendingFinishDao
+
+    companion object {
+        /** v5→v6: добавлено поле typeActivId в pending_finishes для офлайн-старта тренировок. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pending_finishes ADD COLUMN typeActivId INTEGER")
+            }
+        }
+
+        /**
+         * v6→v7: добавлено поле timeStart в pending_finishes.
+         * Хранит реальное время начала офлайн-тренировки (ISO 8601 UTC) — передаётся
+         * в POST /training/start чтобы бэкенд записал правильный time_start.
+         * Без этого поля time_start на сервере = момент синхронизации (после появления сети),
+         * что всегда позже реального окончания → time_end < time_start.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pending_finishes ADD COLUMN timeStart TEXT")
+            }
+        }
+    }
 }

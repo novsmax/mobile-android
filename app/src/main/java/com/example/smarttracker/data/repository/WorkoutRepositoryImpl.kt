@@ -89,10 +89,10 @@ class WorkoutRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun startTraining(typeActivId: Int): Result<ActiveTrainingResult> =
+    override suspend fun startTraining(typeActivId: Int, timeStart: String?): Result<ActiveTrainingResult> =
         runCatching {
             try {
-                trainingApi.startTraining(TrainingStartRequestDto(typeActivId)).toDomain()
+                trainingApi.startTraining(TrainingStartRequestDto(typeActivId, timeStart)).toDomain()
             } catch (e: HttpException) {
                 // 400 означает что у пользователя уже есть активная тренировка на сервере.
                 // Бросаем доменное исключение — ViewModel получит его без зависимости от Retrofit.
@@ -152,6 +152,8 @@ class WorkoutRepositoryImpl @Inject constructor(
         timeEnd: String,
         totalDistanceMeters: Double?,
         totalKilocalories: Double?,
+        typeActivId: Int?,
+        timeStart: String?,
     ) {
         pendingFinishDao.insert(
             PendingFinishEntity(
@@ -159,6 +161,8 @@ class WorkoutRepositoryImpl @Inject constructor(
                 timeEnd             = timeEnd,
                 totalDistanceMeters = totalDistanceMeters,
                 totalKilocalories   = totalKilocalories,
+                typeActivId         = typeActivId,
+                timeStart           = timeStart,
             )
         )
     }

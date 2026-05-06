@@ -21,4 +21,19 @@ data class PendingFinishEntity(
     val timeEnd: String,
     val totalDistanceMeters: Double?,
     val totalKilocalories: Double?,
+    /**
+     * ID типа активности. Non-null только для тренировок, начатых офлайн (localUUID).
+     * [SyncGpsPointsWorker] при наличии этого поля сначала регистрирует тренировку
+     * на сервере, затем переключает GPS-точки на serverUUID и загружает их.
+     * null = тренировка уже зарегистрирована на сервере, регистрация не нужна.
+     */
+    val typeActivId: Int? = null,
+    /**
+     * Реальное время начала тренировки (ISO 8601 UTC). Заполняется вместе с [typeActivId]
+     * для офлайн-старта — передаётся в POST /training/start чтобы бэкенд записал
+     * правильный time_start вместо времени получения запроса (которое всегда позже
+     * реального старта для офлайн-тренировок → time_end < time_start без этого поля).
+     * null = онлайн-тренировка, бэкенд сам устанавливает time_start = now().
+     */
+    val timeStart: String? = null,
 )

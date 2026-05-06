@@ -26,7 +26,7 @@ class MockWorkoutRepository @Inject constructor() : WorkoutRepository {
         )
     )
 
-    override suspend fun startTraining(typeActivId: Int): Result<ActiveTrainingResult> =
+    override suspend fun startTraining(typeActivId: Int, timeStart: String?): Result<ActiveTrainingResult> =
         Result.success(ActiveTrainingResult(
             activeTrainingId = UUID.randomUUID().toString(),
             typeActivId = typeActivId,
@@ -61,5 +61,7 @@ class MockWorkoutRepository @Inject constructor() : WorkoutRepository {
         timeEnd: String,
         totalDistanceMeters: Double?,
         totalKilocalories: Double?,
+        typeActivId: Int?,
+        timeStart: String?,
     ) = Unit  // Mock: очередь не нужна
 }
