@@ -37,24 +37,43 @@ class SaveTrainingWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         val trainingId = inputData.getString(KEY_TRAINING_ID)
+        // SyncGpsPointsWorker передаёт resolvedId если офлайн-тренировка была перерегистрирована
+        // (localUUID → serverUUID). Используем его для поиска в PendingFinish и вызова saveTraining.
+        val resolvedId = inputData.getString(SyncGpsPointsWorker.KEY_RESOLVED_TRAINING_ID)
+            ?: trainingId
 
         // Лимит попыток: при permanent-ошибке не крутимся вечно.
         // Удаляем запись — лучше потерять данные, чем блокировать WorkManager навсегда.
         if (runAttemptCount >= MAX_ATTEMPTS) {
-            Log.e(TAG, "Max retry attempts ($MAX_ATTEMPTS) reached${trainingId?.let { " for trainingId=$it" } ?: " for all pending records"}")
-            if (trainingId != null) {
-                pendingFinishDao.delete(trainingId)
+            Log.e(TAG, "Max retry attempts ($MAX_ATTEMPTS) reached${resolvedId?.let { " for trainingId=$it" } ?: " for all pending records"}")
+            if (resolvedId != null) {
+                pendingFinishDao.delete(resolvedId)
             } else {
                 pendingFinishDao.getAll().forEach { pendingFinishDao.delete(it.trainingId) }
             }
             return Result.failure()
         }
 
-        // Если передан конкретный trainingId — обрабатываем только его.
+        // Если передан конкретный resolvedId — обрабатываем только его.
         // Это исключает дублирование запросов при параллельном запуске
         // нескольких воркеров (по одному на каждую офлайн-тренировку).
-        val pending = if (trainingId != null) {
-            listOfNotNull(pendingFinishDao.getById(trainingId))
+        //
+        // Fallback на getAll(): SyncGpsPointsWorker мог вернуть стale localUUID как
+        // resolvedId если его retry-попытка сработала после успешного re-key (localUUID → serverUUID).
+        // В этом случае getById(localUUID) == null, но serverUUID-запись существует.
+        // getAll() подхватит её и закроет тренировку. Безопасно: другие SaveTrainingWorker-ы
+        // для дополнительных записей тоже вернут success() с пустым pending — дублей нет.
+        val pending = if (resolvedId != null) {
+            val byId = pendingFinishDao.getById(resolvedId)
+            if (byId != null) {
+                listOf(byId)
+            } else {
+                val all = pendingFinishDao.getAll()
+                if (all.isNotEmpty()) {
+                    Log.w(TAG, "No pending entry for resolvedId=$resolvedId (possible stale localUUID after re-key), fallback to ${all.size} entries")
+                }
+                all
+            }
         } else {
             pendingFinishDao.getAll()
         }

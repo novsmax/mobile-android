@@ -156,6 +156,7 @@ abstract class AuthModule {
                 SmartTrackerDatabase::class.java,
                 "smart_tracker.db"
             )
+            .addMigrations(SmartTrackerDatabase.MIGRATION_5_6, SmartTrackerDatabase.MIGRATION_6_7)
             // Деструктивная миграция допустима пока данные тренировок не критичны
             // (production-миграция — в Этапе 5).
             .fallbackToDestructiveMigration()

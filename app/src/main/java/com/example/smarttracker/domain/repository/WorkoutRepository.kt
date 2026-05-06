@@ -30,8 +30,11 @@ interface WorkoutRepository {
      * Возвращает серверный UUID, который используется для GPS-загрузки и завершения.
      *
      * @param typeActivId идентификатор типа активности
+     * @param timeStart фактическое время начала (ISO 8601 UTC). Передаётся для офлайн-тренировок,
+     *   чтобы бэкенд записал реальный time_start вместо времени получения запроса.
+     *   null — бэкенд устанавливает time_start = now() (онлайн-тренировки).
      */
-    suspend fun startTraining(typeActivId: Int): Result<ActiveTrainingResult>
+    suspend fun startTraining(typeActivId: Int, timeStart: String? = null): Result<ActiveTrainingResult>
 
     /**
      * Завершить тренировку на сервере.
@@ -97,11 +100,18 @@ interface WorkoutRepository {
      * при появлении сети и доставит запрос — даже если приложение закрыто.
      *
      * Идемпотентно: повторный вызов для одного [trainingId] игнорируется (IGNORE).
+     *
+     * @param typeActivId non-null только для офлайн-старта: [SyncGpsPointsWorker] сначала
+     *   зарегистрирует тренировку, затем загрузит GPS-точки.
+     * @param timeStart реальное время начала тренировки (ISO 8601 UTC). Передаётся вместе
+     *   с [typeActivId] для офлайн-старта — бэкенд запишет правильный time_start.
      */
     suspend fun savePendingFinish(
         trainingId: String,
         timeEnd: String,
         totalDistanceMeters: Double?,
         totalKilocalories: Double?,
+        typeActivId: Int? = null,
+        timeStart: String? = null,
     )
 }
