@@ -189,8 +189,11 @@ class WorkoutRepositoryImpl @Inject constructor(
         if (!isStale) return Result.success(cached!!.toDomain())
         return runCatching {
             fetchAndCacheMET(typeActivId)
-            // getWithZones не вернёт null после успешного fetchAndCacheMET.
-            metActivityDao.getWithZones(typeActivId)!!.toDomain()
+            val refreshed = metActivityDao.getWithZones(typeActivId)
+                ?: throw IllegalStateException(
+                    "MET activity for typeActivId=$typeActivId was not cached after refresh"
+                )
+            refreshed.toDomain()
         }
     }
 
