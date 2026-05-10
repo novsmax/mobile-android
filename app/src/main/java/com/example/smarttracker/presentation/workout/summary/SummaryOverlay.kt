@@ -3,6 +3,9 @@ package com.example.smarttracker.presentation.workout.summary
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -217,11 +221,32 @@ private fun StatCard(
 
 // ── Карточка мини-статистики поверх карты в полноэкранном режиме оверлея ────
 
+/**
+ * Данные для отображения в [StatsOverlayCard] при scrubbing трека.
+ * Когда non-null, заменяет суммарные значения из [WorkoutSummaryUiState].
+ *
+ * @property speedDisplay    мгновенный темп "M:SS мин/км" или "—" в точке scrub
+ * @property elapsedDisplay  прошедшее время "HH:MM:SS" с начала тренировки до scrub
+ * @property distanceDisplay дистанция "1.23 км" от старта до scrub
+ * @property elevationDisplay набор высоты "12.3 м" от старта до scrub
+ */
+data class ScrubDisplayStats(
+    val speedDisplay:     String,
+    val elapsedDisplay:   String,
+    val distanceDisplay:  String,
+    val elevationDisplay: String,
+)
+
 @Composable
 fun StatsOverlayCard(
     state: WorkoutSummaryUiState,
     modifier: Modifier = Modifier,
+    scrubStats: ScrubDisplayStats? = null,
 ) {
+    val dur  = scrubStats?.elapsedDisplay   ?: state.durationDisplay
+    val spd  = scrubStats?.speedDisplay     ?: state.paceDisplay
+    val dist = scrubStats?.distanceDisplay  ?: state.distanceDisplay
+    val elev = scrubStats?.elevationDisplay ?: state.elevationDisplay
     Column(
         modifier = modifier
             .width(133.dp)
@@ -231,10 +256,10 @@ fun StatsOverlayCard(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        StatsOverlayRow(iconRes = R.drawable.ic_time, value = state.durationDisplay)
-        StatsOverlayRow(iconRes = R.drawable.ic_speed,      value = state.paceDisplay)
-        StatsOverlayRow(iconRes = R.drawable.ic_passed_distance,      value = state.distanceDisplay)
-        StatsOverlayRow(iconRes = R.drawable.ic_elevation,     value = state.elevationDisplay)
+        StatsOverlayRow(iconRes = R.drawable.ic_time,            value = dur)
+        StatsOverlayRow(iconRes = R.drawable.ic_speed,           value = spd)
+        StatsOverlayRow(iconRes = R.drawable.ic_passed_distance, value = dist)
+        StatsOverlayRow(iconRes = R.drawable.ic_elevation,       value = elev)
     }
 }
 
@@ -266,16 +291,15 @@ private fun StatsOverlayRow(iconRes: Int, value: String) {
  *  - правая часть — тёмным [ColorPrimary];
  *  - круглый белый бегунок с обводкой [ColorPrimary] на границе двух сегментов.
  *
- * Сейчас компонент **визуальный**: тренировка завершена, прогресс=1f. В будущем
- * сюда можно подключить state для интерактивного «проигрывания» трека по точкам —
- * параметр [progress] уже выдан наружу.
- *
  * @param progress 0f..1f — позиция бегунка и граница мятной заливки.
+ * @param onProgressChange колбэк при перетаскивании/тапе (0f..1f). Если null — компонент
+ *   не реагирует на касания (чисто визуальный режим).
  */
 @Composable
 fun TrainingProgressBar(
     progress: Float,
     modifier: Modifier = Modifier,
+    onProgressChange: ((Float) -> Unit)? = null,
 ) {
     // Размеры заметно увеличены — прогресс-бар крупнее, читается в полноэкранном режиме.
     val trackHeight = 10.dp
@@ -285,7 +309,22 @@ fun TrainingProgressBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(thumbSize),
+            .height(thumbSize)
+            // Тап → прыжок на позицию; горизонтальный drag → плавное перемещение.
+            // pointerInput(onProgressChange): при смене колбэка жест переинициализируется.
+            .pointerInput(onProgressChange) {
+                if (onProgressChange == null) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    onProgressChange((down.position.x / size.width.toFloat()).coerceIn(0f, 1f))
+                    horizontalDrag(down.id) { change ->
+                        onProgressChange(
+                            (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        )
+                        change.consume()
+                    }
+                }
+            },
     ) {
         // Дорожка: pill, тёмный фон + чёрная обводка. Активная заливка
         // вкладывается внутрь и обрезается общим CircleShape — стык получается

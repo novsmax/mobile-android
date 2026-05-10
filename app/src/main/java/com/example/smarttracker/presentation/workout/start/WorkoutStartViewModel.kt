@@ -616,6 +616,7 @@ class WorkoutStartViewModel @Inject constructor(
             durationDisplay  = WorkoutSummaryFormatters.formatDuration(summaryDurationMs),
             elevationDisplay = WorkoutSummaryFormatters.formatElevation(summaryElevationM),
             trackPoints      = state.trackPoints,
+            cumulativeData   = buildCumulativeData(state.trackPoints),
             isLoading        = false,
         )
 
@@ -720,6 +721,9 @@ class WorkoutStartViewModel @Inject constructor(
             summaryOverlay   = snapshot,
             isMapFullscreen  = false,
             mapTilesFailed   = false,
+            // Точки перенесены в snapshot.trackPoints — освобождаем live-список.
+            // Карта читает трек из summary?.trackPoints в WorkoutStartScreen.
+            trackPoints      = emptyList(),
         ) }
         currentTrainingId = null
         isTrainingRegisteredOnServer = false
@@ -781,43 +785,53 @@ class WorkoutStartViewModel @Inject constructor(
      * TODO: фильтр шума GPS-альтиметра (±5–10 м) — см. CLAUDE.md пункт 19.
      */
     private fun calculateElevationGain(points: List<LocationPoint>): Double {
-        if (points.size < 2) {
-            Log.d("ElevationDebug", "skipped: points=${points.size}")
-            return 0.0
-        }
+        if (points.size < 2) return 0.0
         var gain = 0.0
         var prevAlt: Double? = null
-        var nullCount = 0
-        var positiveDeltaCount = 0
         for (p in points) {
-            val alt = p.altitude
-            if (alt == null) {
-                nullCount++
-                continue
-            }
-            prevAlt?.let { prev ->
-                val delta = alt - prev
-                if (delta > 0) {
-                    gain += delta
-                    positiveDeltaCount++
-                }
-            }
+            val alt = p.altitude ?: continue
+            prevAlt?.let { prev -> if (alt - prev > 0) gain += alt - prev }
             prevAlt = alt
         }
-        // Дебаг-лог: оставлен временно для проверки расчёта высоты на эмуляторе
-        // (где `adb emu geo fix` иногда не пробрасывает altitude корректно).
-        // Удалить после подтверждения работоспособности на реальном устройстве.
-        val sampleAlts = points.take(5).map { it.altitude }
-        val tailAlts = points.takeLast(5).map { it.altitude }
-        Log.d(
-            "ElevationDebug",
-            "totalPoints=${points.size}, nullAltitude=$nullCount, " +
-                "positiveDeltas=$positiveDeltaCount, gain=%.2fm, ".format(gain) +
-                "first5Alt=$sampleAlts, last5Alt=$tailAlts"
-        )
         return gain
     }
 
+    /**
+     * Предвычисляет накопленные значения трека (дистанция, набор высоты, время) для
+     * каждой GPS-точки. Используется для O(1) scrub-lookups при перемотке трека.
+     * Вычисляется один раз в [onFinishClick] и хранится в снимке [WorkoutSummaryUiState].
+     */
+    private fun buildCumulativeData(
+        points: List<LocationPoint>,
+    ): com.example.smarttracker.presentation.workout.summary.CumulativeTrackData {
+        if (points.size < 2) return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData()
+        val n = points.size
+        val distances = ArrayList<Float>(n)
+        val elevations = ArrayList<Float>(n)
+        val elapsed    = ArrayList<Long>(n)
+        var cumDistM = 0.0
+        var cumElevM = 0f
+        val t0 = points.first().timestampUtc
+        distances.add(0f); elevations.add(0f); elapsed.add(0L)
+        for (i in 1 until n) {
+            // calculateDeltaDistance(points, i - 1) возвращает расстояние от точки (i-2)
+            // до КОНЦА списка — не шаг, а хвост. Исправляем: передаём пару из двух соседних
+            // точек, fromIndex=0 → startIdx=max(0,-1)=0 → haversine ровно одного шага O(1).
+            cumDistM += calculateTrainingStatsUseCase.calculateDeltaDistance(
+                listOf(points[i - 1], points[i]), 0
+            )
+            distances.add((cumDistM / 1000.0).toFloat())
+            val dAlt = ((points[i].altitude ?: 0.0) - (points[i - 1].altitude ?: 0.0)).toFloat()
+            if (dAlt > 0f) cumElevM += dAlt
+            elevations.add(cumElevM)
+            elapsed.add(points[i].timestampUtc - t0)
+        }
+        return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData(
+            distancesKm = distances,
+            elevationsM = elevations,
+            elapsedMs   = elapsed,
+        )
+    }
 
     /** Карта сообщила, что тайлы недоступны (нет сети + нет кэша). Показываем fallback. */
     fun onMapTilesFailed() {

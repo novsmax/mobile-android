@@ -61,4 +61,14 @@ object WorkoutSummaryFormatters {
         val paceSec = (paceSecPerKm % 60).toInt()
         return "$paceMin:${paceSec.toString().padStart(2, '0')} мин/км"
     }
+
+    /**
+     * Мгновенный темп из скорости в м/с → "M:SS мин/км" или "—".
+     * Используется при scrubbing трека для показа скорости в конкретной точке.
+     */
+    fun formatInstantPace(speedMs: Float?): String {
+        if (speedMs == null || speedMs <= 0f) return "—"
+        // 1 км / скорость (км/мс) = время на 1 км в мс
+        return formatPace(1f, (1_000_000f / speedMs).toLong())
+    }
 }

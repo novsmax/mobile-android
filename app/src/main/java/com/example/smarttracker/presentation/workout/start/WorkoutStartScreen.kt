@@ -50,6 +50,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,11 +79,14 @@ import com.example.smarttracker.presentation.theme.ColorSecondary
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
 import com.example.smarttracker.presentation.workout.permission.LocationPermissionHandler
+import com.example.smarttracker.presentation.workout.summary.ScrubDisplayStats
 import com.example.smarttracker.presentation.workout.summary.StatsOverlayCard
 import com.example.smarttracker.presentation.workout.summary.SummaryBody
 import com.example.smarttracker.presentation.workout.summary.SummaryHeader
 import com.example.smarttracker.presentation.workout.summary.TrainingProgressBar
+import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryUiState
+import kotlin.math.roundToInt
 
 /**
  * Экран начала / активной / завершённой тренировки.
@@ -126,6 +130,33 @@ fun WorkoutStartScreen(
     val summary = state.summaryOverlay
     val overlayVisible = summary != null
     val isFullscreen = state.isMapFullscreen
+
+    // ── Scrubbing трека ──────────────────────────────────────────────────────────
+    // Сбрасывается в 1f каждый раз, когда открывается новый оверлей итогов:
+    // тренировка только что завершилась — ползунок стоит в конце.
+    var scrubProgress by remember(summary) { mutableFloatStateOf(1f) }
+
+    val scrubIndex = if (summary != null && summary.trackPoints.size >= 2) {
+        (scrubProgress * (summary.trackPoints.size - 1))
+            .roundToInt()
+            .coerceIn(0, summary.trackPoints.size - 1)
+    } else null
+
+    val scrubStats: ScrubDisplayStats? = if (scrubIndex != null && summary != null) {
+        val cd = summary.cumulativeData
+        ScrubDisplayStats(
+            speedDisplay     = WorkoutSummaryFormatters.formatInstantPace(
+                                   summary.trackPoints[scrubIndex].speed),
+            elapsedDisplay   = WorkoutSummaryFormatters.formatDuration(
+                                   cd.elapsedMs.getOrElse(scrubIndex) { 0L }),
+            distanceDisplay  = WorkoutSummaryFormatters.formatDistance(
+                                   cd.distancesKm.getOrElse(scrubIndex) { 0f }),
+            elevationDisplay = WorkoutSummaryFormatters.formatElevation(
+                                   cd.elevationsM.getOrElse(scrubIndex) { 0f }),
+        )
+    } else null
+
+    val scrubPoint = scrubIndex?.let { summary?.trackPoints?.getOrNull(it) }
 
     // ── Системная кнопка Back ────────────────────────────────────────────────
     // В полноэкранном режиме карты — сворачиваем к обычному оверлею.
@@ -227,7 +258,9 @@ fun WorkoutStartScreen(
                     ),
                 currentLocation = state.trackPoints.lastOrNull(),
                 lastKnownLocation = state.lastKnownLocation,
-                trackPoints = state.trackPoints,
+                // В режиме оверлея итогов live-список очищен (onFinishClick),
+                // трек берётся из снимка чтобы не дублировать ~1800 точек в памяти.
+                trackPoints = summary?.trackPoints ?: state.trackPoints,
                 isTracking = state.isTracking,
                 isGpsActive = state.isGpsActive,
                 mapTilesFailed = state.mapTilesFailed,
@@ -236,6 +269,15 @@ fun WorkoutStartScreen(
                 // карта анимированно подгоняется под весь маршрут. Когда оверлей
                 // закрывается (summary становится null), fit не повторяется.
                 fitToTrackBoundsKey = summary,
+                // Маркер scrubbing: виден только в полноэкранном режиме карты.
+                // В обычном оверлее карта маленькая — маркер лишний и отвлекает.
+                scrubPoint = if (isFullscreen) scrubPoint else null,
+                // Иконка активности для маркера старта трека.
+                // null пока оверлей не открыт (summary == null).
+                startIconRes = summary?.let { activityIconRes(it.activityIconKey) },
+                // В fullscreen-режиме attribution уходит в правый верхний угол —
+                // иначе он перекрывает StatsOverlayCard в левом верхнем углу.
+                attributionTopEnd = isFullscreen,
             )
 
             // Прозрачный слой для перехвата клика в режиме превью оверлея.
@@ -295,6 +337,7 @@ fun WorkoutStartScreen(
             if (overlayVisible && isFullscreen && summary != null) {
                 StatsOverlayCard(
                     state = summary,
+                    scrubStats = scrubStats,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(16.dp),
@@ -388,7 +431,8 @@ fun WorkoutStartScreen(
         ) {
             Column {
                 TrainingProgressBar(
-                    progress = 1f,
+                    progress = scrubProgress,
+                    onProgressChange = { scrubProgress = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp, vertical = 16.dp),

@@ -4,6 +4,22 @@ import com.example.smarttracker.domain.model.LocationPoint
 import java.io.File
 
 /**
+ * Предвычисленные накопленные значения трека для O(1) scrub-lookups.
+ *
+ * Индекс i соответствует i-й GPS-точке в [WorkoutSummaryUiState.trackPoints].
+ * Вычисляется один раз в ViewModel при построении снимка итогов.
+ *
+ * @property distancesKm накопленная дистанция от старта до точки i, км
+ * @property elevationsM накопленный набор высоты от старта до точки i, м
+ * @property elapsedMs   прошедшее время от старта до точки i, мс
+ */
+data class CumulativeTrackData(
+    val distancesKm: List<Float> = emptyList(),
+    val elevationsM: List<Float> = emptyList(),
+    val elapsedMs:   List<Long>  = emptyList(),
+)
+
+/**
  * Снимок итогов завершённой тренировки. Используется как поле
  * [WorkoutStartViewModel.UiState.summaryOverlay] и передаётся в UI-слой
  * для отрисовки оверлея поверх [WorkoutStartScreen] (без навигации).
@@ -21,6 +37,7 @@ import java.io.File
  * @property durationDisplay  длительность "HH:MM:SS"
  * @property elevationDisplay набор высоты "12.3 м"
  * @property trackPoints      GPS-точки тренировки для отрисовки трека на карте
+ * @property cumulativeData   предвычисленные накопленные значения для scrubbing
  * @property isLoading        true пока загружаются данные (для будущего экрана истории)
  */
 data class WorkoutSummaryUiState(
@@ -34,5 +51,6 @@ data class WorkoutSummaryUiState(
     val durationDisplay: String = "00:00:00",
     val elevationDisplay: String = "0.0 м",
     val trackPoints: List<LocationPoint> = emptyList(),
+    val cumulativeData: CumulativeTrackData = CumulativeTrackData(),
     val isLoading: Boolean = false,
 )
