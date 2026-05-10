@@ -305,15 +305,18 @@ fun MapViewComposable(
                         // ── Маркер scrubbing: белый круг с тёмной обводкой ────────
                         // Показывается только когда scrubPoint != null (fullscreen + scrub).
                         // Визуально совпадает с бегунком TrainingProgressBar.
+                        val density = android.content.res.Resources.getSystem().displayMetrics.density
+                        val scrubRadiusPx = 10f * density
+                        val scrubStrokeWidthPx = 2.5f * density
                         style.addSource(
                             GeoJsonSource("scrub-source",
                                 FeatureCollection.fromFeatures(emptyList()))
                         )
                         style.addLayer(
                             CircleLayer("scrub-layer", "scrub-source").withProperties(
-                                PropertyFactory.circleRadius(10f),
+                                PropertyFactory.circleRadius(scrubRadiusPx),
                                 PropertyFactory.circleColor(android.graphics.Color.WHITE),
-                                PropertyFactory.circleStrokeWidth(2.5f),
+                                PropertyFactory.circleStrokeWidth(scrubStrokeWidthPx),
                                 PropertyFactory.circleStrokeColor(
                                     android.graphics.Color.rgb(
                                         (ColorPrimary.red   * 255).toInt(),
