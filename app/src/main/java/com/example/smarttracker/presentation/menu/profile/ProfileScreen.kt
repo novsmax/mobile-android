@@ -144,14 +144,15 @@ fun ProfileScreen(
                             colorFieldEmpty = colorFieldEmpty,
                         )
                     }
-                    // ── Кнопка «Выйти» закреплена внизу всегда ───────────────────
-                    Spacer(modifier = Modifier.height(16.dp))
-                    LogoutButton(
-                        onClick = onLogout,
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                    )
                 }
             }
+            // ── Кнопка «Выйти» закреплена внизу всегда — видна во всех состояниях ──
+            // Намеренно снаружи when{}: при ошибке загрузки (нет сети / 5xx) или во время
+            // spinner-а пользователь должен иметь возможность выйти из аккаунта.
+            LogoutButton(
+                onClick = onLogout,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 }
