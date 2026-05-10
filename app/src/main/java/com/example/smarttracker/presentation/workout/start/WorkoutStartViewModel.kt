@@ -129,6 +129,15 @@ class WorkoutStartViewModel @Inject constructor(
         /** GPS-точки текущей тренировки для рисования трека на карте */
         val trackPoints: List<LocationPoint> = emptyList(),
         /**
+         * Индексы первой точки после каждого resume (0-based в [trackPoints]).
+         * Пара (i-1, i) где i ∈ pauseGapIndices — gap-пара: точки разделены паузой,
+         * haversine и разница timestampUtc не отражают реальное движение.
+         * Используется [buildCumulativeData] для симметрии с live-расчётами:
+         *   - дистанция: gap-пара пропускается (≡ resumeAnchorPointCount + 1)
+         *   - elapsed: время паузы вычитается (≡ pausedElapsedMs в таймере)
+         */
+        val pauseGapIndices: List<Int> = emptyList(),
+        /**
          * true когда MapLibre не смог загрузить тайлы (нет сети + нет кэша).
          * Устанавливается через callback onDidFailLoadingMap из MapViewComposable.
          * При завершении тренировки сбрасывается в false.
@@ -561,7 +570,9 @@ class WorkoutStartViewModel @Inject constructor(
         // +1: calculateDeltaDistance начинает с (fromIndex-1), поэтому якорь на размер списка
         // дал бы пару (последняя точка до паузы → первая точка после паузы) — это и есть gap.
         // С +1 startIdx == size, пара gap'а не попадает в расчёт.
-        resumeAnchorPointCount = _state.value.trackPoints.size + 1
+        val gapIdx = _state.value.trackPoints.size  // первая точка после resume будет здесь
+        resumeAnchorPointCount = gapIdx + 1
+        _state.update { it.copy(pauseGapIndices = it.pauseGapIndices + gapIdx) }
         // GPS-трекер продолжает работать (сервис жив), но точки в Room не пишутся
         LocationTrackingService.setRecording(context, false)
     }
@@ -616,6 +627,7 @@ class WorkoutStartViewModel @Inject constructor(
             durationDisplay  = WorkoutSummaryFormatters.formatDuration(summaryDurationMs),
             elevationDisplay = WorkoutSummaryFormatters.formatElevation(summaryElevationM),
             trackPoints      = state.trackPoints,
+            cumulativeData   = buildCumulativeData(state.trackPoints, state.pauseGapIndices),
             isLoading        = false,
         )
 
@@ -720,6 +732,9 @@ class WorkoutStartViewModel @Inject constructor(
             summaryOverlay   = snapshot,
             isMapFullscreen  = false,
             mapTilesFailed   = false,
+            // Точки перенесены в snapshot.trackPoints — освобождаем live-список.
+            // Карта читает трек из summary?.trackPoints в WorkoutStartScreen.
+            trackPoints      = emptyList(),
         ) }
         currentTrainingId = null
         isTrainingRegisteredOnServer = false
@@ -747,15 +762,16 @@ class WorkoutStartViewModel @Inject constructor(
                                   GpsStatus.ACQUIRED
                               else
                                   GpsStatus.SEARCHING,
-            elapsedMs       = 0L,
-            timerDisplay    = "00:00:00",
-            distanceDisplay = "0.00 км",
-            avgSpeedDisplay = "00:00 мин/км",
-            caloriesDisplay = "0 кКал",
-            distanceMeters  = 0.0,
-            kilocalories    = 0.0,
-            trackPoints     = emptyList(),
-            mapTilesFailed  = false,
+            elapsedMs         = 0L,
+            timerDisplay      = "00:00:00",
+            distanceDisplay   = "0.00 км",
+            avgSpeedDisplay   = "00:00 мин/км",
+            caloriesDisplay   = "0 кКал",
+            distanceMeters    = 0.0,
+            kilocalories      = 0.0,
+            trackPoints       = emptyList(),
+            pauseGapIndices   = emptyList(),
+            mapTilesFailed    = false,
         ) }
         offlineMapManager.reset()
         // Перезапускаем discovery-GPS: иконка остаётся живой между тренировками
@@ -781,43 +797,82 @@ class WorkoutStartViewModel @Inject constructor(
      * TODO: фильтр шума GPS-альтиметра (±5–10 м) — см. CLAUDE.md пункт 19.
      */
     private fun calculateElevationGain(points: List<LocationPoint>): Double {
-        if (points.size < 2) {
-            Log.d("ElevationDebug", "skipped: points=${points.size}")
-            return 0.0
-        }
+        if (points.size < 2) return 0.0
         var gain = 0.0
         var prevAlt: Double? = null
-        var nullCount = 0
-        var positiveDeltaCount = 0
         for (p in points) {
-            val alt = p.altitude
-            if (alt == null) {
-                nullCount++
-                continue
-            }
-            prevAlt?.let { prev ->
-                val delta = alt - prev
-                if (delta > 0) {
-                    gain += delta
-                    positiveDeltaCount++
-                }
-            }
+            val alt = p.altitude ?: continue
+            prevAlt?.let { prev -> if (alt - prev > 0) gain += alt - prev }
             prevAlt = alt
         }
-        // Дебаг-лог: оставлен временно для проверки расчёта высоты на эмуляторе
-        // (где `adb emu geo fix` иногда не пробрасывает altitude корректно).
-        // Удалить после подтверждения работоспособности на реальном устройстве.
-        val sampleAlts = points.take(5).map { it.altitude }
-        val tailAlts = points.takeLast(5).map { it.altitude }
-        Log.d(
-            "ElevationDebug",
-            "totalPoints=${points.size}, nullAltitude=$nullCount, " +
-                "positiveDeltas=$positiveDeltaCount, gain=%.2fm, ".format(gain) +
-                "first5Alt=$sampleAlts, last5Alt=$tailAlts"
-        )
         return gain
     }
 
+    /**
+     * Предвычисляет накопленные значения трека (дистанция, набор высоты, время) для
+     * каждой GPS-точки. Используется для O(1) scrub-lookups при перемотке трека.
+     * Вычисляется один раз в [onFinishClick] и хранится в снимке [WorkoutSummaryUiState].
+     *
+     * Симметрия с live-расчётами (критично для совпадения итогов в конце scrubbing):
+     * - **Дистанция:** gap-пары (индексы из [pauseGapIndices]) пропускаются — аналогично
+     *   `resumeAnchorPointCount + 1` в `observeTrackingData`.
+     * - **Elapsed:** время каждой паузы (timestampUtc[gap] − timestampUtc[gap−1]) вычитается
+     *   нарастающим итогом — аналогично `startTimeMs = now − pausedElapsedMs` в таймере.
+     * - **Высота:** null-точки пропускаются через `prevAlt: Double?` — идентично
+     *   `calculateElevationGain` (избегает ложных скачков +300 м при null→0.0).
+     *
+     * @param pauseGapIndices индексы первых точек после каждого resume (из [UiState.pauseGapIndices])
+     */
+    private fun buildCumulativeData(
+        points: List<LocationPoint>,
+        pauseGapIndices: List<Int>,
+    ): com.example.smarttracker.presentation.workout.summary.CumulativeTrackData {
+        if (points.size < 2) return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData()
+        val gapSet = pauseGapIndices.toHashSet()
+        val n = points.size
+        val distances = ArrayList<Float>(n)
+        val elevations = ArrayList<Float>(n)
+        val elapsed    = ArrayList<Long>(n)
+        var cumDistM     = 0.0
+        var cumElevM     = 0f
+        var totalPausedMs = 0L
+        val t0 = points.first().timestampUtc
+        // prevAlt: последняя известная высота — зеркалит логику calculateElevationGain.
+        // Если передавать (altitude ?: 0.0), null-точка трактуется как высота 0 → ложный
+        // скачок +300 м при переходе от 300 м к null и затем снова к 305 м (60× расхождение).
+        var prevAlt: Double? = points.first().altitude
+        distances.add(0f); elevations.add(0f); elapsed.add(0L)
+        for (i in 1 until n) {
+            val isGap = i in gapSet
+            if (isGap) {
+                // Gap-пара: пользователь стоял на паузе. Haversine не считаем — телепорт
+                // не отражает реального движения. Время паузы вычитаем из elapsed.
+                totalPausedMs += points[i].timestampUtc - points[i - 1].timestampUtc
+            } else {
+                // calculateDeltaDistance(points, i - 1) возвращает расстояние от точки (i-2)
+                // до КОНЦА списка — не шаг, а хвост. Исправляем: передаём пару из двух
+                // соседних точек, fromIndex=0 → startIdx=max(0,-1)=0 → haversine одного шага.
+                cumDistM += calculateTrainingStatsUseCase.calculateDeltaDistance(
+                    listOf(points[i - 1], points[i]), 0
+                )
+                val altCur = points[i].altitude
+                if (altCur != null && prevAlt != null) {
+                    val dAlt = (altCur - prevAlt).toFloat()
+                    if (dAlt > 0f) cumElevM += dAlt
+                }
+            }
+            val altCur = points[i].altitude
+            if (altCur != null) prevAlt = altCur  // обновляем prevAlt даже на gap-точках
+            distances.add((cumDistM / 1000.0).toFloat())
+            elevations.add(cumElevM)
+            elapsed.add(points[i].timestampUtc - t0 - totalPausedMs)
+        }
+        return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData(
+            distancesKm = distances,
+            elevationsM = elevations,
+            elapsedMs   = elapsed,
+        )
+    }
 
     /** Карта сообщила, что тайлы недоступны (нет сети + нет кэша). Показываем fallback. */
     fun onMapTilesFailed() {
