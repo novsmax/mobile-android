@@ -155,10 +155,14 @@ fun MapViewComposable(
     // старых замыканий (factory-callback создаётся один раз при первом compose).
     // Нужно для setStyle-callback: isGpsActive может стать true уже после того, как
     // factory зафиксировал начальное значение false.
-    val latestIsGpsActive    = rememberUpdatedState(isGpsActive)
-    val latestWorkoutStarted = rememberUpdatedState(currentLocation != null)
-    val latestLastKnown      = rememberUpdatedState(lastKnownLocation)
-    val latestStartIconRes   = rememberUpdatedState(startIconRes)
+    val latestIsGpsActive          = rememberUpdatedState(isGpsActive)
+    val latestWorkoutStarted       = rememberUpdatedState(currentLocation != null)
+    val latestLastKnown            = rememberUpdatedState(lastKnownLocation)
+    val latestStartIconRes         = rememberUpdatedState(startIconRes)
+    // Нужен в ON_START чтобы не включать GPS-точку когда карта в summary-режиме.
+    // DisposableEffect(lifecycleOwner) создаёт замыкание один раз — без rememberUpdatedState
+    // он бы зафиксировал начальный null и не видел последующих обновлений.
+    val latestFitToTrackBoundsKey  = rememberUpdatedState(fitToTrackBoundsKey)
 
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -180,9 +184,13 @@ fun MapViewComposable(
                     // Восстанавливаем LocationComponent если он был активирован.
                     // runCatching: до setStyle locationComponent.activate ещё не вызывался —
                     // обращение к нему бросает IllegalStateException.
+                    // Проверяем latestFitToTrackBoundsKey: если != null — карта в summary-
+                    // режиме, GPS-точку не показываем (иначе синяя точка появляется поверх
+                    // замороженного трека при возврате из фона).
                     if (enableLocationDot) {
                         runCatching {
-                            state.mapLibreMap?.locationComponent?.isLocationComponentEnabled = true
+                            state.mapLibreMap?.locationComponent?.isLocationComponentEnabled =
+                                (latestFitToTrackBoundsKey.value == null)
                         }
                     }
                 }
