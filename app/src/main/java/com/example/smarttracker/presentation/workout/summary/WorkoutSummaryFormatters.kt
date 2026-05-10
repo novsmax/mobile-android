@@ -68,7 +68,8 @@ object WorkoutSummaryFormatters {
      */
     fun formatInstantPace(speedMs: Float?): String {
         if (speedMs == null || speedMs <= 0f) return "—"
-        // 1 км / скорость (км/мс) = время на 1 км в мс
-        return formatPace(1f, (1_000_000f / speedMs).toLong())
+        // Время на 1 км в мс: paceMsPerKm = (1000 м * 1000 мс) / (м/с)
+        val paceMsPerKm = (1_000_000f / speedMs).toLong()
+        return formatPace(1f, paceMsPerKm)
     }
 }
