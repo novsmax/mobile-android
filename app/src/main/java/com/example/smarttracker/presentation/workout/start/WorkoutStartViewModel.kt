@@ -812,6 +812,10 @@ class WorkoutStartViewModel @Inject constructor(
         var cumDistM = 0.0
         var cumElevM = 0f
         val t0 = points.first().timestampUtc
+        // prevAlt: последняя известная высота — зеркалит логику calculateElevationGain.
+        // Если передавать (altitude ?: 0.0), null-точка трактуется как высота 0 → ложный
+        // скачок +300 м при переходе от 300 м к null и затем снова к 305 м (60× расхождение).
+        var prevAlt: Double? = points.first().altitude
         distances.add(0f); elevations.add(0f); elapsed.add(0L)
         for (i in 1 until n) {
             // calculateDeltaDistance(points, i - 1) возвращает расстояние от точки (i-2)
@@ -821,8 +825,12 @@ class WorkoutStartViewModel @Inject constructor(
                 listOf(points[i - 1], points[i]), 0
             )
             distances.add((cumDistM / 1000.0).toFloat())
-            val dAlt = ((points[i].altitude ?: 0.0) - (points[i - 1].altitude ?: 0.0)).toFloat()
-            if (dAlt > 0f) cumElevM += dAlt
+            val altCur = points[i].altitude
+            if (altCur != null && prevAlt != null) {
+                val dAlt = (altCur - prevAlt).toFloat()
+                if (dAlt > 0f) cumElevM += dAlt
+            }
+            if (altCur != null) prevAlt = altCur  // всегда обновляем до последней known
             elevations.add(cumElevM)
             elapsed.add(points[i].timestampUtc - t0)
         }
