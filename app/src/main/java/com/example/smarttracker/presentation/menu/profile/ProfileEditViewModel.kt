@@ -144,7 +144,7 @@ class ProfileEditViewModel @Inject constructor(
         viewModelScope.launch {
             val extension = when (context.contentResolver.getType(uri)?.lowercase()) {
                 "image/png" -> ".png"
-                "image/jpeg", "image/jpg" -> ".jpg"
+                "image/jpeg" -> ".jpg"
                 else -> null
             }
             if (extension == null) {
@@ -157,7 +157,7 @@ class ProfileEditViewModel @Inject constructor(
                 .query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
                 ?.use { c ->
                     if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
-                } ?: null
+                }
             if (size != null && size > maxPhotoBytes) {
                 _state.update { it.copy(errorMessage = "Фото не должно превышать 5 МБ") }
                 return@launch
