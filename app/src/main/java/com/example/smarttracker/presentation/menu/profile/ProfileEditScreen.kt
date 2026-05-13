@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,8 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -58,20 +55,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.smarttracker.R
 import com.example.smarttracker.presentation.common.AppTab
+import com.example.smarttracker.presentation.common.ProfileAvatarImage
+import com.example.smarttracker.presentation.common.ProfileFieldBox
 import com.example.smarttracker.presentation.common.DateVisualTransformation
 import com.example.smarttracker.presentation.common.SmartTrackerBottomBar
+import com.example.smarttracker.presentation.theme.ColorDestructive
 import com.example.smarttracker.presentation.theme.ColorPrimary
 import com.example.smarttracker.presentation.theme.ColorSecondary
+import com.example.smarttracker.presentation.theme.ProfileTextStyles
 import com.example.smarttracker.presentation.theme.geologicaFontFamily
 import com.example.smarttracker.presentation.theme.geologicaFontFamilyItalic
 import java.io.File
 import kotlinx.coroutines.launch
-
-private val ColorDelete = Color(0xFFFC3F1D)
 
 /**
  * Экран редактирования профиля пользователя.
@@ -251,7 +248,7 @@ fun ProfileEditScreen(
                                 fontFamily = geologicaFontFamily,
                                 fontWeight = FontWeight.Light,
                                 fontSize = 13.sp,
-                                color = ColorDelete,
+                                color = ColorDestructive,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -328,7 +325,7 @@ fun ProfileEditScreen(
                     fontFamily = geologicaFontFamily,
                     fontWeight = FontWeight.Normal,
                     fontSize = 16.sp,
-                    color = ColorDelete,
+                    color = ColorDestructive,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
@@ -370,7 +367,7 @@ fun ProfileEditScreen(
                     Text(
                         text = "Удалить",
                         fontFamily = geologicaFontFamily,
-                        color = ColorDelete,
+                        color = ColorDestructive,
                     )
                 }
             },
@@ -429,25 +426,15 @@ private fun AvatarEditSection(
     isUploading: Boolean,
     onAvatarClick: () -> Unit,
 ) {
-    val context = LocalContext.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.clickable(enabled = !isUploading, onClick = onAvatarClick),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(photoUrl)
-                    .memoryCacheKey("$photoUrl/$photoKey")
-                    .diskCacheKey("$photoUrl/$photoKey")
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "Фото профиля",
-                placeholder = painterResource(R.drawable.ic_profile_2),
-                error = painterResource(R.drawable.ic_profile_2),
-                modifier = Modifier
-                    .size(96.dp)
-                    .border(1.dp, ColorPrimary, CircleShape),
+            ProfileAvatarImage(
+                photoUrl = photoUrl,
+                photoKey = photoKey,
+                modifier = Modifier.size(96.dp),
             )
             if (isUploading) {
                 CircularProgressIndicator(
@@ -462,7 +449,7 @@ private fun AvatarEditSection(
             fontFamily = geologicaFontFamily,
             fontStyle = FontStyle.Normal,
             fontWeight = FontWeight.Normal,
-            fontSize = 22.sp,
+            fontSize = 16.sp,
             color = ColorPrimary,
         )
     }
@@ -482,23 +469,11 @@ private fun EditField(
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
     val valueColor = if (value.isNotEmpty()) ColorSecondary else ColorPrimary.copy(alpha = 0.3f)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .border(1.dp, ColorPrimary, RoundedCornerShape(5.dp)),
-        contentAlignment = Alignment.CenterStart,
-    ) {
+    ProfileFieldBox {
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = TextStyle(
-                fontFamily = geologicaFontFamilyItalic,
-                fontStyle = FontStyle.Italic,
-                fontWeight = FontWeight.Normal,
-                fontSize = 14.sp,
-                color = valueColor,
-            ),
+            textStyle = ProfileTextStyles.fieldInput.copy(color = valueColor),
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
             cursorBrush = SolidColor(ColorSecondary),
             singleLine = true,
@@ -511,10 +486,7 @@ private fun EditField(
                 ) {
                     Text(
                         text = "$label: ",
-                        fontFamily = geologicaFontFamilyItalic,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 14.sp,
+                        style = ProfileTextStyles.fieldInput,
                         color = ColorPrimary,
                     )
                     innerTextField()
@@ -533,23 +505,11 @@ private fun EditDateField(
     onValueChange: (String) -> Unit,
 ) {
     val valueColor = if (value.isNotEmpty()) ColorSecondary else ColorPrimary.copy(alpha = 0.3f)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .border(1.dp, ColorPrimary, RoundedCornerShape(5.dp)),
-        contentAlignment = Alignment.CenterStart,
-    ) {
+    ProfileFieldBox {
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = TextStyle(
-                fontFamily = geologicaFontFamilyItalic,
-                fontStyle = FontStyle.Italic,
-                fontWeight = FontWeight.Normal,
-                fontSize = 14.sp,
-                color = valueColor,
-            ),
+            textStyle = ProfileTextStyles.fieldInput.copy(color = valueColor),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             visualTransformation = DateVisualTransformation(),
             cursorBrush = SolidColor(ColorSecondary),
@@ -563,10 +523,7 @@ private fun EditDateField(
                 ) {
                     Text(
                         text = "$label: ",
-                        fontFamily = geologicaFontFamilyItalic,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 14.sp,
+                        style = ProfileTextStyles.fieldInput,
                         color = ColorPrimary,
                     )
                     innerTextField()
@@ -581,35 +538,12 @@ private fun EditDateField(
 @Composable
 private fun GenderField(gender: String, onToggle: () -> Unit) {
     val genderText = if (gender == "male") "Мужской" else "Женский"
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .border(1.dp, ColorPrimary, RoundedCornerShape(5.dp))
-            .clickable(onClick = onToggle),
-        contentAlignment = Alignment.CenterStart,
-    ) {
+    ProfileFieldBox(modifier = Modifier.clickable(onClick = onToggle)) {
         Text(
             modifier = Modifier.padding(start = 12.dp),
             text = buildAnnotatedString {
-                withStyle(
-                    SpanStyle(
-                        fontFamily = geologicaFontFamilyItalic,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 14.sp,
-                        color = ColorPrimary,
-                    )
-                ) { append("Пол: ") }
-                withStyle(
-                    SpanStyle(
-                        fontFamily = geologicaFontFamilyItalic,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 14.sp,
-                        color = ColorSecondary,
-                    )
-                ) { append(genderText) }
+                withStyle(ProfileTextStyles.fieldLabel) { append("Пол: ") }
+                withStyle(ProfileTextStyles.fieldValue) { append(genderText) }
             },
         )
     }
@@ -623,7 +557,7 @@ private fun DeleteAccountButton(enabled: Boolean, onClick: () -> Unit, modifier:
         modifier = modifier
             .fillMaxWidth()
             .height(50.dp)
-            .border(1.dp, ColorDelete.copy(alpha = if (enabled) 1f else 0.4f), RoundedCornerShape(10.dp))
+            .border(1.dp, ColorDestructive.copy(alpha = if (enabled) 1f else 0.4f), RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -632,7 +566,7 @@ private fun DeleteAccountButton(enabled: Boolean, onClick: () -> Unit, modifier:
             fontFamily = geologicaFontFamily,
             fontWeight = FontWeight.Light,
             fontSize = 18.sp,
-            color = ColorDelete.copy(alpha = if (enabled) 1f else 0.4f),
+            color = ColorDestructive.copy(alpha = if (enabled) 1f else 0.4f),
         )
     }
 }
