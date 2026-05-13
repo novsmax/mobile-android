@@ -86,6 +86,7 @@ class ProfileViewModel @Inject constructor(
     /** Применяет данные [User] к состоянию без изменения [ProfileUiState.isLoading]. */
     private fun applyUser(user: com.example.smarttracker.domain.model.User) {
         _state.update {
+            val isPhotoChanged = user.photoUrl != it.photoUrl
             it.copy(
                 firstName  = user.firstName,
                 lastName   = user.lastName,
@@ -99,7 +100,7 @@ class ProfileViewModel @Inject constructor(
                 weight    = user.weight?.let { w -> "%.0f".format(w) },
                 height    = user.height?.let { h -> "%.0f".format(h) },
                 photoUrl  = user.photoUrl,
-                photoKey  = it.photoKey + 1,
+                photoKey  = if (isPhotoChanged) it.photoKey + 1 else it.photoKey,
                 errorMessage = null,
             )
         }
