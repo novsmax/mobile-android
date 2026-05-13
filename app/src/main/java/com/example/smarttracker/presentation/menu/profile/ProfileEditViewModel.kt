@@ -188,7 +188,14 @@ class ProfileEditViewModel @Inject constructor(
         val ext = if (mimeType.contains("png")) ".png" else ".jpg"
         return runCatching {
             val temp = File.createTempFile("profile_photo_", ext, context.cacheDir)
-            context.contentResolver.openInputStream(uri)!!.use { it.copyTo(temp.outputStream()) }
+            val input = context.contentResolver.openInputStream(uri)
+                ?: throw IOException("Unable to open input stream for uri: $uri")
+
+            input.use { inputStream ->
+                temp.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            }
             temp
         }.getOrNull()
     }
