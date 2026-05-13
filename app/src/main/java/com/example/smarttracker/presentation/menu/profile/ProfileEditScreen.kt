@@ -122,7 +122,7 @@ fun ProfileEditScreen(
     ) { granted ->
         if (granted) {
             val file = File.createTempFile("camera_photo_", ".jpg", context.cacheDir)
-            val uri = FileProvider.getUriForFile(context, "com.example.smarttracker.provider", file)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
             cameraOutputUri = uri
             cameraLauncher.launch(uri)
         }
