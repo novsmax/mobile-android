@@ -8,6 +8,7 @@ import coil.ImageLoaderFactory
 import coil.util.DebugLogger
 import dagger.hilt.android.HiltAndroidApp
 import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import org.maplibre.android.MapLibre
 import org.maplibre.android.WellKnownTileServer
 import javax.inject.Inject
@@ -47,10 +48,20 @@ class SmartTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
     // Coil 2.x: ImageLoaderFactory.newImageLoader() — Application сам является Context
     // DebugLogger пишет в logcat тег "Coil" — помогает диагностировать ошибки загрузки.
     override fun newImageLoader(): ImageLoader =
-        ImageLoader.Builder(this)
-            .okHttpClient(okHttpClient)
-            .logger(if (BuildConfig.DEBUG) DebugLogger() else null)
+        // Для Coil оставляем auth/interceptor/authenticator цепочку, но убираем HttpLoggingInterceptor,
+        // чтобы не логировать бинарные image-body в debug и не засорять logcat.
+        okHttpClient.newBuilder()
+            .apply {
+                interceptors().removeAll { it is HttpLoggingInterceptor }
+                networkInterceptors().removeAll { it is HttpLoggingInterceptor }
+            }
             .build()
+            .let { coilClient ->
+                ImageLoader.Builder(this)
+                    .okHttpClient(coilClient)
+                    .logger(if (BuildConfig.DEBUG) DebugLogger() else null)
+                    .build()
+            }
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
