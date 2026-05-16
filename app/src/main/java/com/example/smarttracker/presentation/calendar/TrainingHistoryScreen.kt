@@ -25,19 +25,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.smarttracker.presentation.theme.ColorPrimary
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
-import com.example.smarttracker.presentation.theme.geologicaFontFamily
 import java.time.DayOfWeek
 
 /**
@@ -85,13 +79,7 @@ fun TrainingHistoryScreen(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .drawBehind {
-                    drawRect(
-                        color = TrunkColor,
-                        topLeft = Offset(size.width / 2f - 8.dp.toPx(), 0f),
-                        size = Size(16.dp.toPx(), size.height),
-                    )
-                },
+                .drawTrunk(),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(
@@ -210,10 +198,8 @@ private fun StartWorkoutButton(label: String, onClick: () -> Unit) {
     ) {
         Text(
             text = label,
+            style = WorkoutTextStyles.primaryButtonLabel,
             color = Color.White,
-            fontSize = 20.sp,
-            fontFamily = geologicaFontFamily,
-            fontWeight = FontWeight.Light,
         )
     }
     Spacer(

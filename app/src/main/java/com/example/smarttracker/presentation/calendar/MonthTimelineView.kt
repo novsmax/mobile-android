@@ -1,36 +1,32 @@
 package com.example.smarttracker.presentation.calendar
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.smarttracker.R
 import com.example.smarttracker.domain.model.TrainingHistoryItem
-import com.example.smarttracker.presentation.theme.geologicaFontFamily
+import com.example.smarttracker.presentation.theme.WorkoutTextStyles
+import com.example.smarttracker.presentation.workout.activityIconRes
 import java.time.DayOfWeek
 import java.time.LocalDate
 
 /**
  * Месячный вид истории тренировок.
  * Один нод = одна неделя (Пн–Вс). Нодов обычно 4–5.
- * Недели без тренировок: только нод и метка диапазона дат.
- * Тап по строке → [onWeekSelected] (переход в Week view).
+ * Недели без тренировок: только нод и метка диапазона дат (без карточки).
+ * Тап по карточке → [onWeekSelected] (переход в Week view).
  */
 @Composable
 internal fun MonthTimelineView(
@@ -41,7 +37,10 @@ internal fun MonthTimelineView(
     val weeks = generateWeeksForMonth(monthStart)
     val currentWeekStart = LocalDate.now().with(DayOfWeek.MONDAY)
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.SpaceEvenly,
+    ) {
         itemsIndexed(weeks) { index, weekStart ->
             val weekEnd = weekStart.plusDays(6)
             MonthWeekRow(
@@ -53,7 +52,6 @@ internal fun MonthTimelineView(
                 onWeekSelected = onWeekSelected,
             )
         }
-        item { Spacer(Modifier.height(16.dp)) }
     }
 }
 
@@ -71,56 +69,102 @@ private fun MonthWeekRow(
         isCardRight = isCardRight,
         isCurrent = isCurrent,
         label = label,
-        modifier = Modifier
-            .height(if (weekItems.isEmpty()) 60.dp else 120.dp)
-            .clickable { onWeekSelected(weekStart) },
-        card = if (weekItems.isNotEmpty()) {
-            { MonthWeekCard(weekItems = weekItems, isCardRight = isCardRight) }
-        } else null,
+        modifier = Modifier.height(MonthRowHeight),
+        card = if (weekItems.isNotEmpty()) ({
+            TimelineCardWrapper(isCardRight = isCardRight, onClick = { onWeekSelected(weekStart) }) {
+                MonthWeekCard(weekItems = weekItems, weekStart = weekStart)
+            }
+        }) else null,
     )
 }
 
 /**
  * Карточка агрегированных данных за неделю (Month view).
- * Показывает: количество тренировок (Bold) / длительность / дистанция / ккал.
+ *
+ * Стрип: 7 иконок (по одной на каждый день Пн–Вс) через [MonthActivityStrip].
+ * Инфо (6 строк): "Тр. - N" (Bold) + доминирующий тип / время / расстояние / высота / ккал.
+ *
+ * Поле «Набор высоты» = "--", т.к. данных нет в [TrainingHistoryItem] (нет в API /training/history).
  */
 @Composable
-private fun MonthWeekCard(weekItems: List<TrainingHistoryItem>, isCardRight: Boolean) {
-    val shape = if (isCardRight) {
-        RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
-    } else {
-        RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
-    }
-    val typeIds = weekItems.map { it.typeActivId }
-    val totalSecs = totalDurationSeconds(weekItems)
-    val totalDist = weekItems.mapNotNull { it.distanceM }.sum().takeIf { it > 0.0 }
-    val totalKcal = weekItems.mapNotNull { it.kilocalories }.sum().takeIf { it > 0.0 }
+private fun MonthWeekCard(
+    weekItems: List<TrainingHistoryItem>,
+    weekStart: LocalDate,
+) {
+    val totals = aggregateTotals(weekItems)
+    val dominant = dominantType(weekItems)  // Pair<typeActivId, percent>?
 
-    Row(
-        modifier = Modifier
-            .height(110.dp)
-            .background(Color.White, shape)
-            .border(1.dp, TrunkColor, shape)
-            .clip(shape),
-    ) {
-        if (!isCardRight) MultiActivityStrip(typeIds, 110)
-        Column(
+    // 7 иконок: для каждого дня — самая длинная тренировка или null (нет тренировки).
+    val weekDays = (0..6).map { weekStart.plusDays(it.toLong()) }
+    val dayTypeIds: List<Int?> = weekDays.map { day ->
+        longestTypeIdOf(weekItems.filter { it.date == day })
+    }
+
+    Row(modifier = Modifier.height(MonthCardHeight)) {
+        MonthActivityStrip(dayTypeIds = dayTypeIds)
+
+        TimelineInfoColumn(
             modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-                .weight(1f),
+                .width(MonthInfoWidth)
+                .height(MonthCardHeight),
+            verticalArrangement = Arrangement.SpaceEvenly,
         ) {
             Text(
                 text = "Тр. - ${weekItems.size}",
-                fontSize = 12.sp,
-                fontFamily = geologicaFontFamily,
-                fontWeight = FontWeight.Bold,
-                color = TrunkColor,
-                modifier = Modifier.padding(vertical = 1.dp),
+                style = WorkoutTextStyles.timelineLabelBold,
+                modifier = Modifier.padding(vertical = 1.dp, horizontal = 5.dp),
             )
-            InfoRow(R.drawable.ic_time, formatSeconds(totalSecs))
-            InfoRow(R.drawable.ic_distance, formatDistanceM(totalDist))
-            InfoRow(R.drawable.ic_kcal, formatKcal(totalKcal))
+            dominant?.let { (typeId, pct) ->
+                InfoRow(
+                    iconRes = activityIconRes(typeId.toString()),
+                    value   = "- ${"%.1f".format(pct)}%",
+                )
+            }
+            InfoRow(R.drawable.ic_time,      formatSeconds(totals.seconds))
+            InfoRow(R.drawable.ic_distance,  formatDistanceM(totals.distanceM))
+            // Набор высоты: нет поля в TrainingHistoryItem → прочерк до появления данных на бэкенде.
+            InfoRow(R.drawable.ic_elevation, "--")
+            InfoRow(R.drawable.ic_kcal,      formatKcal(totals.kilocalories))
         }
-        if (isCardRight) MultiActivityStrip(typeIds, 110)
     }
 }
+
+/**
+ * Стрип 7 иконок — по одной на каждый день недели (Пн–Вс).
+ *
+ * [dayTypeIds] — список из 7 элементов (typeActivId или null = нет тренировки).
+ *  - null         → белый фон + [R.drawable.ic_sleep]
+ *  - typeActivId  → фон [TealAccent] + иконка активности
+ *
+ * Размеры (Figma 350:368): width=[MonthStripWidth], padding vertical=10dp/horizontal=4dp,
+ * иконки [MonthStripIconSize], расстояния через [Arrangement.SpaceEvenly].
+ */
+@Composable
+private fun MonthActivityStrip(dayTypeIds: List<Int?>) {
+    Column(
+        modifier = Modifier
+            .width(MonthStripWidth)
+            .height(MonthCardHeight)
+            .timelineCardSurface(TimelineStripShape)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalArrangement = Arrangement.SpaceEvenly,
+        horizontalAlignment = Alignment.Start,
+    ) {
+        dayTypeIds.forEach { typeActivId ->
+            TimelineIconBox(
+                iconRes = if (typeActivId != null) activityIconRes(typeActivId.toString())
+                          else R.drawable.ic_sleep,
+                bgColor = if (typeActivId != null) TealAccent else Color.White,
+                boxSize = MonthStripIconSize,
+            )
+        }
+    }
+}
+
+// ── Размеры Month-карточки ───────────────────────────────────────────────────
+
+private val MonthRowHeight = 160.dp
+private val MonthCardHeight = 160.dp
+private val MonthStripWidth = 24.dp
+private val MonthStripIconSize = 16.dp
+private val MonthInfoWidth = 140.dp

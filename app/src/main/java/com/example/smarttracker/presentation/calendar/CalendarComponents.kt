@@ -3,33 +3,71 @@ package com.example.smarttracker.presentation.calendar
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.smarttracker.R
+import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.theme.geologicaFontFamily
-import com.example.smarttracker.presentation.workout.activityIconRes
+
+// ── Modifier-расширения таймлайна ────────────────────────────────────────────
+
+/**
+ * Стандартная «поверхность» карточки таймлайна:
+ * рамка [TimelineDims.BorderThickness] [TrunkColor] + clip + фон.
+ *
+ * Используется и для стрипов (любой [TimelineStripShape]), и для инфо-блоков
+ * ([TimelineInfoShape]), и для одиночной полоски тренировки в Day view.
+ */
+internal fun Modifier.timelineCardSurface(
+    shape: Shape,
+    background: Color = Color.White,
+): Modifier = this
+    .border(TimelineDims.BorderThickness, TrunkColor, shape)
+    .clip(shape)
+    .background(background)
+
+/**
+ * Рисует вертикальный ствол ([TimelineDims.TrunkWidth] [TrunkColor]) по горизонтальному центру.
+ * Используется как фон контейнера в [TrainingHistoryScreen].
+ */
+internal fun Modifier.drawTrunk(): Modifier = this.drawBehind {
+    val trunkWidthPx = TimelineDims.TrunkWidth.toPx()
+    drawRect(
+        color = TrunkColor,
+        topLeft = Offset(size.width / 2f - trunkWidthPx / 2f, 0f),
+        size = Size(trunkWidthPx, size.height),
+    )
+}
 
 // ── Нод дерева ────────────────────────────────────────────────────────────────
 
@@ -44,7 +82,7 @@ internal fun TrunkNode(isCurrent: Boolean) {
     Image(
         painter = painterResource(res),
         contentDescription = null,
-        modifier = Modifier.size(32.dp),
+        modifier = Modifier.size(TimelineDims.NodeColumnWidth),
     )
 }
 
@@ -55,7 +93,7 @@ internal fun TrunkNode(isCurrent: Boolean) {
  * Обе половины прижимают контент к стволу:
  *  - левая: [CenterEnd]  → карточка/метка у правого края (рядом со стволом)
  *  - правая: [CenterStart] → карточка/метка у левого края (рядом со стволом)
- * Ствол НЕ рисуется здесь — он рисуется drawBehind в [TrainingHistoryScreen].
+ * Ствол НЕ рисуется здесь — он рисуется [Modifier.drawTrunk] в [TrainingHistoryScreen].
  */
 @Composable
 internal fun TimelineRow(
@@ -78,7 +116,7 @@ internal fun TimelineRow(
         }
 
         Box(
-            modifier = Modifier.width(32.dp).fillMaxHeight(),
+            modifier = Modifier.width(TimelineDims.NodeColumnWidth).fillMaxHeight(),
             contentAlignment = Alignment.Center,
         ) {
             TrunkNode(isCurrent)
@@ -92,6 +130,30 @@ internal fun TimelineRow(
             else if (!isCardRight) PeriodLabel(label, isCurrent)
         }
     }
+}
+
+/**
+ * Box-обёртка вокруг карточки: добавляет [TimelineDims.TrunkGap] со стороны ствола
+ * (зазор от ствола) и опционально делает карточку кликабельной целиком.
+ *
+ * isCardRight=false → padding end (карточка слева, ствол справа).
+ * isCardRight=true  → padding start (карточка справа, ствол слева).
+ */
+@Composable
+internal fun TimelineCardWrapper(
+    isCardRight: Boolean,
+    onClick: (() -> Unit)? = null,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .padding(
+                end   = if (!isCardRight) TimelineDims.TrunkGap else 0.dp,
+                start = if (isCardRight)  TimelineDims.TrunkGap else 0.dp,
+            )
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        content = content,
+    )
 }
 
 // ── Метка периода ─────────────────────────────────────────────────────────────
@@ -108,18 +170,44 @@ internal fun PeriodLabel(text: String, isCurrent: Boolean) {
     )
 }
 
+// ── Инфо-колонка карточки ────────────────────────────────────────────────────
+
+/**
+ * Готовая инфо-колонка карточки таймлайна:
+ * белый фон + рамка + скругление справа ([TimelineInfoShape]) + стандартный паддинг.
+ *
+ * Геометрия (ширина/высота) задаётся через [modifier]: например
+ * `Modifier.width(120.dp).height(110.dp)` или `Modifier.width(120.dp).fillMaxHeight()`.
+ */
+@Composable
+internal fun TimelineInfoColumn(
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Center,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .timelineCardSurface(TimelineInfoShape)
+            .padding(
+                horizontal = TimelineDims.InfoPaddingHorizontal,
+                vertical = TimelineDims.InfoPaddingVertical,
+            ),
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
+}
+
 // ── Строка инфо (иконка + текст) ─────────────────────────────────────────────
 
 /**
  * Строка информации внутри карточки.
- * [fontSize] применяется и к тексту, и к иконке (квадрат fontSize×fontSize).
- * [tint = Color.Unspecified] — иконки показываются в оригинальных цветах drawable.
+ * По умолчанию использует [WorkoutTextStyles.timelineInfo] (14sp Normal ColorPrimary).
  */
 @Composable
 internal fun InfoRow(
     iconRes: Int,
     value: String,
-    fontSize: TextUnit = 12.sp,
+    textStyle: TextStyle = WorkoutTextStyles.timelineInfo,
     iconSize: Dp = 20.dp,
 ) {
     Row(
@@ -135,71 +223,39 @@ internal fun InfoRow(
         Spacer(Modifier.width(2.dp))
         Text(
             text = value,
-            fontSize = fontSize,
-            fontFamily = geologicaFontFamily,
-            fontWeight = FontWeight.Normal,
-            color = TrunkColor,
+            style = textStyle,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-// ── Полоска активности ────────────────────────────────────────────────────────
+// ── Квадратная иконка с фоном (для стрипов и Day-полоски) ───────────────────
 
-/** Одноцветная полоска с иконкой активности (Week/Month view). */
+/**
+ * Квадратная иконка с фоном и скруглением [TimelineDims.IconBoxCornerRadius].
+ * Используется в Week-стрипе, Month-стрипе и Day-полоске.
+ */
 @Composable
-internal fun ActivityStrip(typeActivId: Int, height: Int = 90) {
+internal fun TimelineIconBox(
+    iconRes: Int,
+    bgColor: Color,
+    boxSize: Dp,
+    iconSize: Dp = boxSize,
+    cornerRadius: Dp = TimelineDims.IconBoxCornerRadius,
+) {
     Box(
         modifier = Modifier
-            .width(24.dp)
-            .height(height.dp)
-            .background(activityColorFor(typeActivId)),
+            .size(boxSize)
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(bgColor),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(activityIconRes(typeActivId.toString())),
+            painter = painterResource(iconRes),
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(iconSize),
             tint = Color.Unspecified,
         )
-    }
-}
-
-/** Полоска с несколькими активностями (Week/Month view, несколько тренировок за период). */
-@Composable
-internal fun MultiActivityStrip(typeIds: List<Int>, height: Int = 90) {
-    val distinct = typeIds.distinct().take(4)
-    Column(
-        modifier = Modifier
-            .width(24.dp)
-            .height(height.dp)
-            .background(Color.White),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        distinct.forEach { id ->
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(activityColorFor(id).copy(alpha = 0.2f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(activityIconRes(id.toString())),
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = activityColorFor(id),
-                )
-            }
-        }
-        if (distinct.size < 4) {
-            Box(
-                modifier = Modifier
-                    .weight((4 - distinct.size).toFloat())
-                    .fillMaxWidth()
-                    .background(Color.White),
-            )
-        }
     }
 }

@@ -30,16 +30,6 @@ internal fun formatDurationBetween(start: String?, end: String?): String {
     } catch (_: Exception) { "--" }
 }
 
-/** Сумма длительностей из списка элементов → секунды. */
-internal fun totalDurationSeconds(items: List<TrainingHistoryItem>): Long =
-    items.sumOf { item ->
-        try {
-            val s = parseDateTime(item.timeStart ?: return@sumOf 0L)
-            val e = parseDateTime(item.timeEnd ?: return@sumOf 0L)
-            java.time.Duration.between(s, e).seconds
-        } catch (_: Exception) { 0L }
-    }
-
 /** Секунды → "HH:MM:SS". */
 internal fun formatSeconds(secs: Long): String =
     "%02d:%02d:%02d".format(secs / 3600, (secs % 3600) / 60, secs % 60)
@@ -74,6 +64,52 @@ internal fun parseDateTime(iso: String): java.time.LocalDateTime {
             throw IllegalArgumentException("Не удалось распарсить дату: $iso")
         }
     }
+}
+
+// ── Длительность / агрегация ─────────────────────────────────────────────────
+
+/** Длительность одной тренировки в секундах. 0 при отсутствии времён или ошибке парсинга. */
+internal fun TrainingHistoryItem.durationSeconds(): Long {
+    val s = timeStart ?: return 0L
+    val e = timeEnd ?: return 0L
+    return try {
+        java.time.Duration.between(parseDateTime(s), parseDateTime(e)).seconds
+    } catch (_: Exception) { 0L }
+}
+
+/** Сумма длительностей в списке элементов → секунды. */
+internal fun totalDurationSeconds(items: List<TrainingHistoryItem>): Long =
+    items.sumOf { it.durationSeconds() }
+
+/** Агрегированные итоги периода (день / неделя). */
+internal data class PeriodTotals(
+    val seconds: Long,
+    val distanceM: Double?,
+    val kilocalories: Double?,
+)
+
+/** Суммирует длительность / дистанцию / калории по списку элементов. */
+internal fun aggregateTotals(items: List<TrainingHistoryItem>): PeriodTotals = PeriodTotals(
+    seconds = totalDurationSeconds(items),
+    distanceM = items.mapNotNull { it.distanceM }.sum().takeIf { it > 0.0 },
+    kilocalories = items.mapNotNull { it.kilocalories }.sum().takeIf { it > 0.0 },
+)
+
+/** typeActivId самой длинной (по времени) тренировки из списка, или null если пуст. */
+internal fun longestTypeIdOf(items: List<TrainingHistoryItem>): Int? =
+    items.maxByOrNull { it.durationSeconds() }?.typeActivId
+
+/**
+ * Доминирующий тип за период: тип с наибольшим суммарным временем + его доля от общего (в процентах).
+ * @return null если список пуст или суммарное время = 0.
+ */
+internal fun dominantType(items: List<TrainingHistoryItem>): Pair<Int, Float>? {
+    val totalSecs = totalDurationSeconds(items)
+    if (totalSecs == 0L) return null
+    val byType = items.groupBy { it.typeActivId }
+        .mapValues { (_, list) -> totalDurationSeconds(list) }
+    val dominant = byType.maxByOrNull { it.value } ?: return null
+    return dominant.key to (dominant.value.toFloat() / totalSecs * 100f)
 }
 
 // ── Вспомогательные функции календаря ────────────────────────────────────────

@@ -1,11 +1,8 @@
 package com.example.smarttracker.presentation.calendar
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,17 +14,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.smarttracker.R
 import com.example.smarttracker.domain.model.TrainingHistoryItem
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
@@ -38,8 +32,8 @@ import com.example.smarttracker.presentation.workout.activityIconRes
  *
  * Карточки чередуются лево/право от ствола, вся группа вертикально центрируется.
  * Одна тренировка — в центре экрана; N тренировок — стопка с 16dp зазором.
- * Карточка каждой тренировки: полоска 24dp (скругл. слева) + инфо 120dp (скругл. справа).
- * Зазор между карточкой и стволом: 12dp.
+ * Карточка каждой тренировки: цветная полоска [DayStripWidth] (скругл. слева) +
+ * инфо [TimelineDims.InfoCardWidth] (скругл. справа).
  */
 @Composable
 internal fun DayTimelineView(
@@ -95,15 +89,10 @@ private fun DayRow(
         isCardRight = isCardRight,
         isCurrent = false,
         label = formatTimeRange(item.timeStart, item.timeEnd),
-        modifier = Modifier.height(96.dp),
+        modifier = Modifier.height(DayRowHeight),
         card = {
-            Box(
-                modifier = Modifier.padding(
-                    end   = if (!isCardRight) 12.dp else 0.dp,
-                    start = if (isCardRight)  12.dp else 0.dp,
-                )
-            ) {
-                DayCard(item = item, activityName = activityName, onClick = onTrainingClick)
+            TimelineCardWrapper(isCardRight = isCardRight, onClick = onTrainingClick) {
+                DayCard(item = item, activityName = activityName)
             }
         },
     )
@@ -111,69 +100,45 @@ private fun DayRow(
 
 /**
  * Карточка одной тренировки (Figma: «Лист»).
- *
- * Структура: [полоска 24dp, скругл. tl/bl 10dp] + [инфо 120dp, скругл. tr/br 10dp].
- * На стыке двух отдельных границ образуется видимая линия 2dp.
- * 3 строки 12sp: название активности / длительность / дистанция или ккал.
+ * Структура: [цветная полоска] + [инфо-блок].
+ * 3 строки 14sp: название активности / длительность / дистанция или ккал.
  */
 @Composable
-private fun DayCard(item: TrainingHistoryItem, activityName: String, onClick: () -> Unit) {
-    val stripShape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
-    val infoShape  = RoundedCornerShape(topEnd   = 10.dp, bottomEnd   = 10.dp)
-
-    Row(modifier = Modifier.height(86.dp).clickable(onClick = onClick)) {
-        // Полоска: цветной фон, скругление слева, собственная граница
+private fun DayCard(item: TrainingHistoryItem, activityName: String) {
+    Row(modifier = Modifier.height(DayCardHeight)) {
+        // Цветная полоска: bg = activityColorFor, одна иконка 20dp по центру.
         Box(
             modifier = Modifier
-                .width(28.dp)
+                .width(DayStripWidth)
                 .fillMaxHeight()
-                .border(1.dp, TrunkColor, stripShape)
-                .clip(stripShape)
-                .background(activityColorFor(item.typeActivId)),
+                .timelineCardSurface(TimelineStripShape, activityColorFor(item.typeActivId)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painter = painterResource(activityIconRes(item.typeActivId.toString())),
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(DayStripIconSize),
                 tint = Color.Unspecified,
             )
         }
 
-        // Инфо-область: белый фон, скругление справа, собственная граница
-        Column(
-            modifier = Modifier
-                .width(120.dp)
-                .fillMaxHeight()
-                .border(1.dp, TrunkColor, infoShape)
-                .clip(infoShape)
-                .background(Color.White)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.Center,
+        TimelineInfoColumn(
+            modifier = Modifier.width(TimelineDims.InfoCardWidth).fillMaxHeight(),
         ) {
-            InfoRow(
-                iconRes = R.drawable.ic_samples,
-                value = activityName,
-                fontSize = 14.sp,
-            )
-            InfoRow(
-                iconRes = R.drawable.ic_time,
-                value = formatDurationBetween(item.timeStart, item.timeEnd),
-                fontSize = 14.sp,
-            )
+            InfoRow(R.drawable.ic_samples, activityName)
+            InfoRow(R.drawable.ic_time,    formatDurationBetween(item.timeStart, item.timeEnd))
             if (item.distanceM != null) {
-                InfoRow(
-                    iconRes = R.drawable.ic_distance,
-                    value = formatDistanceM(item.distanceM),
-                    fontSize = 14.sp,
-                )
+                InfoRow(R.drawable.ic_distance, formatDistanceM(item.distanceM))
             } else {
-                InfoRow(
-                    iconRes = R.drawable.ic_kcal,
-                    value = formatKcal(item.kilocalories),
-                    fontSize = 14.sp,
-                )
+                InfoRow(R.drawable.ic_kcal, formatKcal(item.kilocalories))
             }
         }
     }
 }
+
+// ── Размеры Day-карточки ─────────────────────────────────────────────────────
+
+private val DayRowHeight = 96.dp
+private val DayCardHeight = 86.dp
+private val DayStripWidth = 28.dp
+private val DayStripIconSize = 20.dp
