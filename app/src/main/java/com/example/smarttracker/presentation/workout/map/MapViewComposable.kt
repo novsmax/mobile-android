@@ -10,6 +10,7 @@ import android.graphics.PorterDuffColorFilter
 import android.view.Gravity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -47,7 +48,8 @@ import org.maplibre.geojson.Point
  * Composable-обёртка над MapLibre MapView.
  *
  * Жизненный цикл MapView привязан к Compose lifecycle через [DisposableEffect] +
- * [LocalLifecycleOwner]. Карта загружает OpenFreeMap-стиль (без API-ключа).
+ * [LocalLifecycleOwner]. Карта загружает raster-стиль с собственного тайл-сервера
+ * tile.gottland.ru (см. OfflineMapManager.STYLE_JSON) — никакого внешнего API-ключа.
  *
  * Слои поверх базовой карты:
  * - "track-layer" — LineLayer с цветом ColorSecondary, рисует GPS-трек тренировки
@@ -115,6 +117,11 @@ fun MapViewComposable(
     startIconRes: Int? = null,
     // true → значок attribution переезжает в правый верхний угол (полноэкранный режим).
     attributionTopEnd: Boolean = false,
+    // Счётчик-триггер для recenter на текущую GPS-позицию. Инкрементируется
+    // в WorkoutStartScreen по тапу на GPS-бейдж. При каждом изменении ключа
+    // [LaunchedEffect] анимирует камеру к актуальной позиции и восстанавливает
+    // CameraMode.TRACKING. Начальное значение 0 = пропустить первый compose.
+    recenterTrigger: Int = 0,
 ) {
     // Когда тайлы недоступны — показываем текстовый fallback, карту не создаём
     if (mapTilesFailed) {
@@ -249,6 +256,47 @@ fun MapViewComposable(
         }
     }
 
+    // ── Recenter по тапу на GPS-бейдж ───────────────────────────────────────
+    // Key — счётчик из WorkoutStartScreen. При первом compose key = 0 → skip.
+    // На каждом инкременте: вычисляем актуальную позицию (приоритет:
+    // LocationComponent.lastKnownLocation → currentLocation prop → lastKnownLocation prop),
+    // анимируем камеру на zoom 16, после анимации восстанавливаем TRACKING.
+    //
+    // Почему не moveCamera+TRACKING сразу: TRACKING прерывает animateCamera,
+    // поэтому ставим mode в onFinish-колбэке. Если location не доступен —
+    // тап no-op (GPS ещё не получен ни одного fix-а за всю сессию).
+    LaunchedEffect(recenterTrigger) {
+        if (recenterTrigger == 0) return@LaunchedEffect
+        val map = state.mapLibreMap ?: return@LaunchedEffect
+
+        // runCatching: до setStyle locationComponent.activate ещё не вызывался —
+        // обращение к нему бросает IllegalStateException.
+        val lc = runCatching { map.locationComponent }.getOrNull()
+            ?.takeIf {
+                runCatching { it.isLocationComponentActivated && it.isLocationComponentEnabled }
+                    .getOrDefault(false)
+            }
+
+        val fixLatLng = lc?.lastKnownLocation?.let { LatLng(it.latitude, it.longitude) }
+        val target = fixLatLng
+            ?: currentLocation?.let { LatLng(it.latitude, it.longitude) }
+            ?: lastKnownLocation?.let { LatLng(it.latitude, it.longitude) }
+            ?: return@LaunchedEffect
+
+        map.animateCamera(
+            CameraUpdateFactory.newLatLngZoom(target, 16.0),
+            500,
+            object : MapLibreMap.CancelableCallback {
+                override fun onCancel() {}
+                override fun onFinish() {
+                    runCatching {
+                        if (lc != null) lc.cameraMode = CameraMode.TRACKING
+                    }
+                }
+            }
+        )
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -275,14 +323,29 @@ fun MapViewComposable(
                     // перемещаем в верхний левый угол, чтобы не перекрывал кнопки внизу.
                     val density = context.resources.displayMetrics.density
                     val margin8px = (8 * density).toInt()
+                    // Компас отображается при повороте карты. Дефолтная позиция MapLibre —
+                    // top-end, ровно под нашим GPS-бейджем (Alignment.TopEnd, 8dp padding,
+                    // 32dp размер ⇒ верхние ~48dp правого края заняты). Опускаем компас
+                    // ниже бейджа: 8 (padding) + 32 (badge) + 8 (gap) = 48dp сверху,
+                    // 8dp справа — выравнивание с бейджем по правой границе.
+                    val compassTopPx   = (48 * density).toInt()
+                    val compassRight8px = margin8px
 
                     map.uiSettings.apply {
                         isLogoEnabled = false
                         attributionGravity = Gravity.TOP or Gravity.START
                         setAttributionMargins(margin8px, margin8px, 0, 0)
+                        // Компас оставляем включённым (помогает ориентироваться при
+                        // повороте карты двумя пальцами), только переносим под бейдж.
+                        compassGravity = Gravity.TOP or Gravity.END
+                        setCompassMargins(0, compassTopPx, compassRight8px, 0)
                     }
 
-                    map.setStyle(OfflineMapManager.STYLE_URL) { style ->
+                    // Стиль собирается inline из raster-XYZ источника tile.gottland.ru
+                    // (см. OfflineMapManager.STYLE_JSON). Раньше передавали URL OpenFreeMap —
+                    // теперь сервер отдаёт только PNG-тайлы без хостинга style.json,
+                    // поэтому JSON конструируется в коде и передаётся через Style.Builder.
+                    map.setStyle(Style.Builder().fromJson(OfflineMapManager.STYLE_JSON)) { style ->
                         // ── Источник и слой трека ──────────────────────────────────
                         style.addSource(
                             GeoJsonSource("track-source",

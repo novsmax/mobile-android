@@ -51,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -128,6 +129,13 @@ fun WorkoutStartScreen(
 
     // Локальное состояние шторки выбора активности — чисто UI, не нужно в ViewModel
     var showTypeSelector by remember { mutableStateOf(false) }
+
+    // Счётчик recenter-тапов на GPS-бейдж. Передаётся в MapViewComposable как
+    // recenterTrigger — каждое изменение значения (≠ 0) триггерит анимированное
+    // центрирование карты на текущей позиции. Тип Int (не Boolean): два тапа
+    // подряд должны срабатывать дважды, а Boolean toggle при сбросе TRACKING
+    // → user re-tap не отличался бы от предыдущего значения.
+    var recenterTick by remember { mutableIntStateOf(0) }
 
     val summary = state.summaryOverlay
     val overlayVisible = summary != null
@@ -291,6 +299,9 @@ fun WorkoutStartScreen(
                 // В fullscreen-режиме attribution уходит в правый верхний угол —
                 // иначе он перекрывает StatsOverlayCard в левом верхнем углу.
                 attributionTopEnd = isFullscreen,
+                // Recenter по тапу на GPS-бейдж — счётчик инкрементируется
+                // в onClick ниже, карта реагирует через LaunchedEffect(recenterTrigger).
+                recenterTrigger = recenterTick,
             )
 
             // Прозрачный слой для перехвата клика в режиме превью оверлея.
@@ -320,6 +331,11 @@ fun WorkoutStartScreen(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
+                        // Кликаем по бейджу → recenter карты на текущую позицию.
+                        // clip обязателен ПЕРЕД clickable: иначе ripple-эффект
+                        // выходит за круглую форму бейджа (рисуется на прямоугольнике).
+                        .clip(RoundedCornerShape(size = 32.dp))
+                        .clickable { recenterTick++ }
                         .border(
                             width = 1.dp,
                             color = ColorPrimary,
