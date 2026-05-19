@@ -889,9 +889,11 @@ class WorkoutStartViewModel @Inject constructor(
                 trackPoints      = points,
                 cumulativeData   = cumData,
             )
-            // Защита от гонки: если оверлей закрыли пока шла загрузка, не возрождаем его.
+            // Защита от гонки: если оверлей закрыли или уже переключили на другую
+            // тренировку, пока шла загрузка, не перетираем актуальный snapshot.
             _state.update {
-                if (it.summaryOverlay == null) it
+                val currentOverlay = it.summaryOverlay
+                if (currentOverlay == null || currentOverlay.trainingId != item.trainingId) it
                 else it.copy(summaryOverlay = snapshot)
             }
         }
