@@ -47,7 +47,7 @@ class SmartTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
         // Нативный C++ HTTP-стек MapLibre (Mbgl-HttpRequest) использует собственный TLS-bundle
         // и не доверяет ряду CA (→ "Chain validation failed"). Подменяем на OkHttp,
         // который использует системный Android trust store — тот же, что работает для API.
-        HttpRequestUtil.setOkHttpClient(OkHttpClient())
+        HttpRequestUtil.setOkHttpClient(okHttpClient)
     }
 
     // Coil 2.x: ImageLoaderFactory.newImageLoader() — Application сам является Context
