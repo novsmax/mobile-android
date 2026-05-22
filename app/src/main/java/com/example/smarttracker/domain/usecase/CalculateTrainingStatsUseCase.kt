@@ -53,6 +53,15 @@ class CalculateTrainingStatsUseCase @Inject constructor() {
             .sumOf { (p1, p2) -> haversineMeters(p1, p2) }
     }
 
+    /**
+     * Расстояние между двумя соседними точками (метры, haversine + фильтр погрешности).
+     *
+     * Для инкрементального расчёта по одному шагу: без аллокации списка-обёртки,
+     * в отличие от [calculateDeltaDistance], который работает по всему хвосту.
+     */
+    fun distanceBetween(from: LocationPoint, to: LocationPoint): Double =
+        haversineMeters(from, to)
+
     fun execute(points: List<LocationPoint>): TrainingStats {
         if (points.size < 2) {
             return TrainingStats(
