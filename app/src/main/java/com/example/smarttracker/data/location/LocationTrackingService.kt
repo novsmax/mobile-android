@@ -191,6 +191,13 @@ class LocationTrackingService : Service() {
      */
     @Volatile private var recordedPointCount: Int = 0
 
+    /**
+     * true с момента входа в [onDestroy]. Финальный flush буфера выполняется асинхронно
+     * (scope.launch) и может завершиться ПОСЛЕ синхронной очистки recoveryPrefs в onDestroy.
+     * Флаг не даёт [flushBufferLocked] заново записать chronometer-ключи поверх очистки.
+     */
+    @Volatile private var isShuttingDown: Boolean = false
+
     /** Системный NotificationManager — кешируется, вызывается на каждой GPS-точке. */
     private val notificationManager: NotificationManager by lazy {
         getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -853,11 +860,14 @@ class LocationTrackingService : Service() {
         pointBuffer.subList(0, batch.size).clear()
         // Персистим состояние после фактической записи точек в Room — чтобы при
         // перезапуске сервиса через START_STICKY gap-индекс паузы был верным.
-        if (!isDiscovery) persistSessionState()
+        // При shutdown не персистим: onDestroy уже очищает recoveryPrefs, повторная
+        // запись из финального flush оставила бы «мусорное» chronometer-состояние.
+        if (!isDiscovery && !isShuttingDown) persistSessionState()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        isShuttingDown = true
         activeTracker?.stopTracking()
         activeTracker = null
         hintJob?.cancel()

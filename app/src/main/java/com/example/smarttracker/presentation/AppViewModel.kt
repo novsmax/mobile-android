@@ -1,5 +1,6 @@
 package com.example.smarttracker.presentation
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smarttracker.data.local.TokenStorage
@@ -43,8 +44,13 @@ class AppViewModel @Inject constructor(
         // Перепланируем доставку offline-завершённых тренировок: цепочка могла
         // «умереть» пока слот активной тренировки на сервере был занят. KEEP внутри
         // enqueue не дублирует ещё живые цепочки.
+        //
+        // runCatching: реконсиляция читает Room и дёргает WorkManager. Ошибка любого
+        // из них (миграция БД, инициализация) не должна ронять старт приложения —
+        // глотаем и логируем, старт от реконсиляции не зависит.
         viewModelScope.launch {
-            offlineFinishScheduler.reconcilePending()
+            runCatching { offlineFinishScheduler.reconcilePending() }
+                .onFailure { Log.w(TAG, "Offline-finish reconcile failed", it) }
         }
     }
 
@@ -58,5 +64,9 @@ class AppViewModel @Inject constructor(
     fun logout() {
         tokenStorage.clearAll()
         userProfileCache.clear()
+    }
+
+    private companion object {
+        const val TAG = "AppViewModel"
     }
 }

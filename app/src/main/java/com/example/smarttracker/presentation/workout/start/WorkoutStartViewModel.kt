@@ -1017,11 +1017,8 @@ class WorkoutStartViewModel @Inject constructor(
                 // не отражает реального движения. Время паузы вычитаем из elapsed.
                 totalPausedMs += points[i].timestampUtc - points[i - 1].timestampUtc
             } else {
-                // calculateDeltaDistance(points, i - 1) возвращает расстояние от точки (i-2)
-                // до КОНЦА списка — не шаг, а хвост. Исправляем: передаём пару из двух
-                // соседних точек, fromIndex=0 → startIdx=max(0,-1)=0 → haversine одного шага.
-                stepDistM = calculateTrainingStatsUseCase.calculateDeltaDistance(
-                    listOf(points[i - 1], points[i]), 0
+                stepDistM = calculateTrainingStatsUseCase.distanceBetween(
+                    points[i - 1], points[i]
                 )
                 cumDistM += stepDistM
                 val altCur = points[i].altitude
@@ -1150,7 +1147,7 @@ class WorkoutStartViewModel @Inject constructor(
                         for (i in maxOf(1, processedCount) until points.size) {
                             if (i in gapSet) continue
                             accumulatedDistanceM += calculateTrainingStatsUseCase
-                                .calculateDeltaDistance(listOf(points[i - 1], points[i]), 0)
+                                .distanceBetween(points[i - 1], points[i])
                         }
 
                         // Калории инкрементальны на уровне точки. Gap-точка имеет
