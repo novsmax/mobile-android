@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Доступ к интернету для Retrofit -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -21,6 +22,15 @@
     <!-- WakeLock: удерживает CPU активным при выключенном экране для работы GPS -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Doze whitelist: позволяет вызывать ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+         без SecurityException. Нормальное разрешение — выдаётся автоматически.
+         Без whitelist Android Doze throttle'ит GPS-обновления в foreground service
+         через ~5-10 мин после выключения экрана. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Камера — для съёмки фото профиля -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <application
         android:name=".SmartTrackerApp"
         android:allowBackup="true"
@@ -35,6 +45,7 @@
         <activity
             android:name=".presentation.MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="sensorPortrait"
             android:theme="@style/Theme.SmartTracker">
             <intent-filter>
@@ -51,6 +62,37 @@
             android:foregroundServiceType="location"
             android:stopWithTask="false"
             android:exported="false" />
+
+        <!--
+            Отключаем автоматическую инициализацию WorkManager через androidx.startup.
+            Без этого WorkManagerInitializer запускается ДО Application.onCreate() и создаёт
+            WorkManager с дефолтной WorkerFactory — @HiltWorker/@AssistedInject-воркеры
+            получают NoSuchMethodException при инстанциировании.
+            При наличии Configuration.Provider в SmartTrackerApp WorkManager инициализируется
+            лениво при первом вызове WorkManager.getInstance(context) с нашей HiltWorkerFactory.
+        -->
+        <!-- FileProvider для передачи URI файла камере (TakePicture).
+             minSdk=26 → FileProvider обязателен, прямые file:// URI запрещены с API 24. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
     </application>
 

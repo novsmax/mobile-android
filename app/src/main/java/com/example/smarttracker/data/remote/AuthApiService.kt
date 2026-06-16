@@ -9,6 +9,7 @@ import com.example.smarttracker.data.remote.dto.GoalResponseDto
 import com.example.smarttracker.data.remote.dto.LoginRequestDto
 import com.example.smarttracker.data.remote.dto.NicknameCheckRequestDto
 import com.example.smarttracker.data.remote.dto.NicknameCheckResponseDto
+import com.example.smarttracker.data.remote.dto.RefreshTokenRequestDto
 import com.example.smarttracker.data.remote.dto.RegisterRequestDto
 import com.example.smarttracker.data.remote.dto.RegisterResultDto
 import com.example.smarttracker.data.remote.dto.ResendCodeResponseDto
@@ -19,12 +20,17 @@ import com.example.smarttracker.data.remote.dto.ResetPasswordRequestDto
 import com.example.smarttracker.data.remote.dto.ResetPasswordResponseDto
 import com.example.smarttracker.data.remote.dto.RoleDto
 import com.example.smarttracker.data.remote.dto.RoleResponseDto
+import com.example.smarttracker.data.remote.dto.UpdateProfileRequestDto
 import com.example.smarttracker.data.remote.dto.UserInfoResponseDto
 import com.example.smarttracker.data.remote.dto.VerifyResetCodeResponseDto
+import okhttp3.MultipartBody
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Multipart
+import retrofit2.http.PATCH
 import retrofit2.http.POST
-import retrofit2.http.Query
+import retrofit2.http.Part
 
 /**
  * Retrofit-интерфейс для эндпоинтов авторизации.
@@ -66,13 +72,10 @@ interface AuthApiService {
 
     /**
      * Обновление access token по refresh token.
-     *
-     * Нюанс: FastAPI без явного Body(...) трактует строковый параметр
-     * POST-роута как query param, а не тело запроса. Поэтому @Query, не @Body.
-     * Подтверждено сигнатурой: `async def refresh_token(refresh_token: str, ...)`.
+     * FastAPI-роут использует Body(...) — refresh_token в JSON-теле, не query param.
      */
     @POST("auth/refresh")
-    suspend fun refreshToken(@Query("refresh_token") token: String): AuthResponseDto
+    suspend fun refreshToken(@Body request: RefreshTokenRequestDto): AuthResponseDto
 
     /**
      * Проверка доступности nickname.
@@ -156,4 +159,33 @@ interface AuthApiService {
      */
     @GET("user/")
     suspend fun getUserInfo(): UserInfoResponseDto
+
+    /**
+     * Редактирование профиля текущего пользователя.
+     * Все поля nullable — бэкенд обновляет только те, что не null.
+     * Возвращает обновлённый профиль.
+     */
+    @PATCH("user/edit")
+    suspend fun updateProfile(@Body request: UpdateProfileRequestDto): UserInfoResponseDto
+
+    /**
+     * Загрузка фото профиля. multipart/form-data, поле "file", jpg/png до 5 МБ.
+     * Ответ пустой — обновление image_path получаем через повторный GET /user/.
+     */
+    @Multipart
+    @POST("user/photo")
+    suspend fun uploadPhoto(@Part photo: MultipartBody.Part)
+
+    /**
+     * Удаление фото профиля. Бэкенд автоматически подставляет плейсхолдер.
+     */
+    @DELETE("user/photo")
+    suspend fun deletePhoto()
+
+    /**
+     * Удаление аккаунта текущего пользователя.
+     * После успеха токены недействительны — нужно очистить хранилище.
+     */
+    @DELETE("user/delete")
+    suspend fun deleteAccount()
 }

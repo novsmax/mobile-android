@@ -3,6 +3,7 @@ package com.example.smarttracker.data.location
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.SharedPreferences
@@ -15,6 +16,8 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.example.smarttracker.R
+import com.example.smarttracker.presentation.MainActivity
+import com.example.smarttracker.utils.formatHhMmSs
 import com.example.smarttracker.data.location.model.TrackingConfig
 import com.example.smarttracker.data.location.model.TrackingPriority
 import com.example.smarttracker.data.location.model.toAndroidLocation
@@ -33,6 +36,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -65,6 +70,20 @@ import javax.inject.Inject
  * **Moving Average сглаживание:** скользящее среднее по последним 3 точкам (lat/lng)
  * уменьшает шум GPS без задержки, характерной для Калмана.
  */
+/**
+ * Событие смены состояния записи, эмитимое сервисом для синхронизации с ViewModel.
+ *
+ * @param isRecording        новое состояние: true = запись идёт, false = пауза.
+ * @param recordedPointCount число точек тренировки, записанных к этому моменту.
+ *                           На паузе равно индексу, по которому ляжет первая пост-резюм
+ *                           точка — ViewModel использует его как точный gap-индекс.
+ */
+data class RecordingState(
+    val isRecording: Boolean,
+    val recordedPointCount: Int,
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
 @AndroidEntryPoint
 class LocationTrackingService : Service() {
 
@@ -151,6 +170,55 @@ class LocationTrackingService : Service() {
      */
     private var isDiscovery: Boolean = false
 
+    // ── Состояние для rich-уведомления (chronometer + скорость) ──────────────────
+    // @Volatile: записываются из onStartCommand (Main), читаются из GPS-callback'а
+    // (другой поток через scope.launch).
+    /** Момент старта или последнего resume (wall-clock ms). Используется как `setWhen` для chronometer. */
+    @Volatile private var sessionStartedAt: Long = 0L
+    /** Накопленное время до текущей паузы (мс). Сбрасывается на старте, увеличивается при каждой паузе. */
+    @Volatile private var pausedAccumulatedMs: Long = 0L
+    /** Последняя принятая скорость (м/с) для отображения в уведомлении. null = пока неизвестна. */
+    @Volatile private var lastSpeedMps: Float? = null
+
+    /**
+     * Точное число GPS-точек тренировки, записанных (или поставленных в буфер на запись) в Room.
+     *
+     * Источник истины для gap-индекса паузы: ViewModel не может надёжно вычислить его
+     * из размера наблюдаемого списка (тот отстаёт от in-memory буфера сервиса на 1-2 точки).
+     * При паузе сервис эмитит это значение — индекс, по которому ляжет первая пост-резюм точка.
+     *
+     * Считаются только точки тренировки (`!isDiscovery`). Сбрасывается при старте тренировки.
+     */
+    @Volatile private var recordedPointCount: Int = 0
+
+    /**
+     * true с момента входа в [onDestroy]. Финальный flush буфера выполняется асинхронно
+     * (scope.launch) и может завершиться ПОСЛЕ синхронной очистки recoveryPrefs в onDestroy.
+     * Флаг не даёт [flushBufferLocked] заново записать chronometer-ключи поверх очистки.
+     */
+    @Volatile private var isShuttingDown: Boolean = false
+
+    /** Системный NotificationManager — кешируется, вызывается на каждой GPS-точке. */
+    private val notificationManager: NotificationManager by lazy {
+        getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+    }
+
+    /**
+     * PendingIntent тапа по телу уведомления — открывает MainActivity.
+     * Содержимое неизменно, поэтому кешируется (в отличие от toggle-кнопки,
+     * чей EXTRA_RECORDING зависит от текущего isRecording).
+     */
+    private val openAppPendingIntent: PendingIntent by lazy {
+        PendingIntent.getActivity(
+            this,
+            REQ_OPEN_APP,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -187,6 +255,133 @@ class LocationTrackingService : Service() {
             return START_STICKY
         }
 
+        // Обновление trainingId на серверный UUID после офлайн-старта.
+        // Отправляется из ViewModel когда startTraining() вернул serverUUID позже старта сервиса.
+        if (intent?.hasExtra(EXTRA_TRAINING_ID_UPDATE) == true) {
+            val newId = intent.getStringExtra(EXTRA_TRAINING_ID_UPDATE)
+            if (!newId.isNullOrBlank()) {
+                // Обновляем trainingId независимо от состояния activeTracker.
+                // Если трекер ещё не инициализирован (сервис свежий или zombie-state после
+                // пересоздания ОС), recoveryPrefs всё равно нужно обновить — сервис прочитает
+                // новый id при следующей инициализации. Удаление условия activeTracker != null
+                // устраняет тихую потерю обновления при задержке инициализации трекера.
+                scope.launch {
+                    bufferMutex.withLock {
+                        // Сбрасываем буфер под старым id, затем переключаем под мьютексом.
+                        // Без этого точки в памяти запишутся в Room под serverUUID, хотя
+                        // rekeyTrainingId в ViewModel ещё не запускался → сироты в Room.
+                        if (activeTracker != null) flushBufferLocked()
+                        trainingId = newId  // переключаем id; новые точки пойдут под serverUUID
+                    }
+                    recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, newId).apply()
+                }
+            }
+            return START_STICKY
+        }
+
+        // Переход из discovery-режима в тренировку без перезапуска сервиса.
+        // ViewModel отправляет этот Intent вместо stop()+startForegroundService():
+        // onStartCommand() вызывается на живом экземпляре → startForeground() мгновенно,
+        // нет цикла destroy/create и задержки уведомления при первой тренировке.
+        if (intent?.hasExtra(EXTRA_TRANSITION_TO_WORKOUT) == true) {
+            // 1. Останавливаем discovery-трекер и задачи
+            activeTracker?.stopTracking()
+            activeTracker = null
+            hintJob?.cancel()
+            flushTimerJob?.cancel()
+            syncJob?.cancel()
+
+            // 2. Читаем параметры новой тренировки
+            val newId = intent.getStringExtra(EXTRA_TRAINING_ID) ?: run {
+                Log.e(TAG, "EXTRA_TRANSITION_TO_WORKOUT без trainingId — останавливаемся")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            val intervalMs   = intent.getLongExtra(EXTRA_INTERVAL_MS, LocationConfig.INTERVAL_MS_RUNNING)
+            val newAccuracy  = intent.getFloatExtra(EXTRA_ACCURACY_THRESHOLD, LocationConfig.MAX_ACCURACY_RUNNING)
+
+            // 3. Очищаем буфер discovery-точек перед сменой id.
+            // Discovery-точки намеренно удаляются ViewModel через deletePointsForTraining(discId),
+            // поэтому делаем clear(), а не flush() — иначе они запишутся в Room под newId.
+            // runBlocking безопасен здесь: stopTracking() выше уже остановил GPS-коллбэки,
+            // мьютекс свободен, clear() — субмиллисекундная операция.
+            @Suppress("BlockingMethodInNonBlockingContext")
+            runBlocking { bufferMutex.withLock { pointBuffer.clear() } }
+
+            // 4. Обновляем режим и параметры
+            trainingId        = newId
+            isDiscovery       = false
+            accuracyThreshold = newAccuracy
+            isRecording       = true
+
+            // 5. Сбрасываем GPS-фильтры (разрыв между discovery-точками и первой точкой
+            //    тренировки не должен считаться дистанцией). firstFixDone НЕ сбрасываем:
+            //    GPS уже найден в discovery — hint-таймер не нужен, пользователь не ждёт.
+            lastAcceptedLocation = null
+            smoothingWindow.clear()
+            prevCaloriePoint  = null
+
+            // 5a. Инициализация chronometer-базы и счётчика точек для notification.
+            sessionStartedAt    = System.currentTimeMillis()
+            pausedAccumulatedMs = 0L
+            lastSpeedMps        = null
+            recordedPointCount  = 0
+
+            // 6. Crash-recovery и finishSyncFlow
+            recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, newId).apply()
+            persistSessionState()
+            _finishSyncFlow.resetReplayCache()
+
+            // 7. Показываем уведомление немедленно — это главная цель перехода
+            createNotificationChannel()
+            val notification = buildNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    LocationConfig.NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                )
+            } else {
+                startForeground(LocationConfig.NOTIFICATION_ID, notification)
+            }
+
+            // 8. WakeLock (переиспользуем или создаём новый)
+            wakeLock?.let { if (it.isHeld) it.release() }
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "SmartTracker:LocationTracking",
+            ).also { it.acquire(LocationConfig.WAKELOCK_TIMEOUT_MS) }
+
+            // 9. Запускаем новый трекер, таймеры и sync-цикл
+            startLocationUpdates(intervalMs)
+            startFlushTimer()
+            startSyncLoop()
+            startHintTimer()
+
+            // 10. Инициализируем расчёт калорий
+            val typeActivId = intent.getIntExtra(EXTRA_TYPE_ACTIV_ID, -1)
+            val weightKg    = if (intent.hasExtra(EXTRA_WEIGHT_KG)) intent.getFloatExtra(EXTRA_WEIGHT_KG, 0f) else null
+            val heightCm    = if (intent.hasExtra(EXTRA_HEIGHT_CM)) intent.getFloatExtra(EXTRA_HEIGHT_CM, 0f) else null
+            val ageYears    = intent.getIntExtra(EXTRA_AGE_YEARS, 0)
+            val isMale      = intent.getBooleanExtra(EXTRA_IS_MALE, true)
+            sessionWeightKg = weightKg
+            sessionAgeYears = ageYears
+            if (weightKg != null && heightCm != null && typeActivId >= 0) {
+                scope.launch {
+                    sessionCF   = CalorieCalculator.computeCF(
+                        weightKg, heightCm, ageYears,
+                        if (isMale) Gender.MALE else Gender.FEMALE,
+                    )
+                    metActivity = workoutRepository.getMETActivity(typeActivId).getOrNull()
+                    Log.d(TAG, "CalorieCalc transition: CF=$sessionCF, met=$metActivity")
+                }
+            }
+
+            Log.d(TAG, "Transition discovery→workout: trainingId=$newId, interval=${intervalMs}ms")
+            return START_STICKY
+        }
+
         // Команда переключения записи: применяем только если сервис уже инициализирован.
         // Если trainingId пустой (сервис убит ОС и перезапущен START_STICKY),
         // команда EXTRA_RECORDING пришла «в пустой» сервис — останавливаемся,
@@ -194,12 +389,37 @@ class LocationTrackingService : Service() {
         if (intent?.hasExtra(EXTRA_RECORDING) == true) {
             if (trainingId.isNotBlank() && activeTracker != null) {
                 val newRecording = intent.getBooleanExtra(EXTRA_RECORDING, true)
-                // Возобновление после паузы: сбрасываем предыдущую точку, чтобы
-                // пауза не считалась активным интервалом при расчёте калорий.
-                if (newRecording && !isRecording) {
+                // Идемпотентность: повторное нажатие той же кнопки (двойной тап в notification)
+                // не должно ломать счётчик pausedAccumulatedMs.
+                if (newRecording == isRecording) {
+                    return START_STICKY
+                }
+                if (newRecording) {
+                    // Resume: сдвигаем sessionStartedAt в прошлое на накопленный elapsed,
+                    // чтобы chronometer продолжил с того же значения.
+                    sessionStartedAt = System.currentTimeMillis() - pausedAccumulatedMs
+                    // Сбрасываем предыдущую точку — пауза не должна попасть в интервал калорий.
                     prevCaloriePoint = null
+                } else {
+                    // Pause: фиксируем суммарный elapsed как разницу между now и виртуальной
+                    // базой sessionStartedAt. Использовать `=`, не `+=`: после прошлого
+                    // resume sessionStartedAt уже сдвинут в прошлое на накопленный elapsed,
+                    // поэтому (now - sessionStartedAt) — это полный суммарный elapsed,
+                    // а не дельта новой активной фазы.
+                    if (sessionStartedAt > 0L) {
+                        pausedAccumulatedMs = System.currentTimeMillis() - sessionStartedAt
+                    }
                 }
                 isRecording = newRecording
+
+                persistSessionState()
+
+                // Сообщаем ViewModel о смене состояния — синхронизирует UI когда
+                // pause/resume инициирован из notification, и передаёт точный
+                // gap-индекс (recordedPointCount) на момент паузы.
+                _recordingStateFlow.tryEmit(RecordingState(newRecording, recordedPointCount))
+
+                rebuildNotification()
                 return START_STICKY
             } else {
                 stopSelf()
@@ -229,34 +449,57 @@ class LocationTrackingService : Service() {
         // предыдущей тренировки не должен быть принят ViewModel текущей тренировки.
         _finishSyncFlow.resetReplayCache()
 
-        // Сохраняем для crash-recovery до старта трекинга
-        recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, trainingId).apply()
-
-        createNotificationChannel()
-        val notification = buildNotification()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                LocationConfig.NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
-            )
-        } else {
-            startForeground(LocationConfig.NOTIFICATION_ID, notification)
+        if (!isDiscovery) {
+            // Инициализация chronometer-состояния. Если перезапуск через START_STICKY
+            // (intent == null) — восстанавливаем из prefs, чтобы chronometer продолжил
+            // с реального elapsed, а recordedPointCount продолжил с реального числа точек.
+            if (intent != null) {
+                sessionStartedAt    = System.currentTimeMillis()
+                pausedAccumulatedMs = 0L
+                lastSpeedMps        = null
+                recordedPointCount  = 0
+            } else {
+                sessionStartedAt = recoveryPrefs.getLong(
+                    LocationConfig.KEY_SESSION_STARTED_AT, System.currentTimeMillis()
+                )
+                pausedAccumulatedMs = recoveryPrefs.getLong(
+                    LocationConfig.KEY_PAUSED_ACCUMULATED_MS, 0L
+                )
+                recordedPointCount = recoveryPrefs.getInt(
+                    LocationConfig.KEY_RECORDED_POINT_COUNT, 0
+                )
+            }
+            recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, trainingId).apply()
+            persistSessionState()
         }
 
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "SmartTracker:LocationTracking",
-        ).also { it.acquire(LocationConfig.WAKELOCK_TIMEOUT_MS) }
+        if (!isDiscovery) {
+            createNotificationChannel()
+            val notification = buildNotification()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    LocationConfig.NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                )
+            } else {
+                startForeground(LocationConfig.NOTIFICATION_ID, notification)
+            }
+
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "SmartTracker:LocationTracking",
+            ).also { it.acquire(LocationConfig.WAKELOCK_TIMEOUT_MS) }
+        }
 
         Log.d(TAG, "onStartCommand: trainingId=$trainingId, interval=${intervalMs}ms")
 
         startLocationUpdates(intervalMs)
         startFlushTimer()
         startSyncLoop()
-        startHintTimer()
+        if (!isDiscovery) startHintTimer()
 
         // ── Инициализация расчёта калорий (MET-метод) ────────────────────────────
         // Значения профиля передаются из WorkoutStartViewModel через Intent-экстры.
@@ -323,6 +566,9 @@ class LocationTrackingService : Service() {
      * Ошибки ловятся на уровне каждого батча — один сбой не прерывает остальные батчи.
      */
     private fun startSyncLoop() {
+        // Discovery-режим: sync с сервером отключён. Discovery-trainingId не зарегистрирован
+        // на сервере → uploadGpsPoints() вернул бы 404 на каждом батче.
+        if (isDiscovery) return
         syncJob?.cancel()
         syncJob = scope.launch {
             while (isActive) {
@@ -408,7 +654,6 @@ class LocationTrackingService : Service() {
             delay(LocationConfig.GPS_HINT_TIMEOUT_MS)
             // Показываем подсказку в уведомлении если fix ещё не получен
             if (!firstFixDone) {
-                val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 val hint = NotificationCompat.Builder(this@LocationTrackingService, LocationConfig.CHANNEL_ID)
                     .setContentTitle("SmartTracker")
                     .setContentText("Поиск GPS... Выйдите на открытое место")
@@ -416,7 +661,7 @@ class LocationTrackingService : Service() {
                     .setOngoing(true)
                     .setPriority(NotificationCompat.PRIORITY_LOW)
                     .build()
-                manager.notify(LocationConfig.NOTIFICATION_ID, hint)
+                notificationManager.notify(LocationConfig.NOTIFICATION_ID, hint)
             }
         }
     }
@@ -471,9 +716,9 @@ class LocationTrackingService : Service() {
         if (!firstFixDone) {
             firstFixDone = true
             hintJob?.cancel()
-            // Восстанавливаем стандартное уведомление
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            manager.notify(LocationConfig.NOTIFICATION_ID, buildNotification())
+            // Восстанавливаем стандартное уведомление вместо hint'а "Выйдите на открытое место".
+            // rebuildNotification сам проверяет isDiscovery — в discovery ничего не делает.
+            rebuildNotification()
             offlineMapManager.downloadRegionIfNeeded(
                 LatLng(smoothed.latitude, smoothed.longitude),
                 isWifiConnected(),
@@ -481,6 +726,12 @@ class LocationTrackingService : Service() {
         }
 
         lastAcceptedLocation = smoothed
+        // Обновляем скорость для отображения в notification (м/с; конверсия в км/ч в buildNotification).
+        // Запись даже если isRecording=false ниже — чтобы в момент resume последняя
+        // известная скорость отрисовалась без задержки.
+        if (smoothed.hasSpeed()) {
+            lastSpeedMps = smoothed.speed
+        }
 
         // ── Запись в буфер только во время активного трекинга ───────────────────
         // При isRecording = false GPS-трекер продолжает работать: фильтры, сглаживание
@@ -488,11 +739,11 @@ class LocationTrackingService : Service() {
         // после снятия паузы. Точки в Room не попадают.
         if (!isRecording) return
 
-        // Discovery-режим: точки НЕ пишутся в Room и НЕ синхронизируются.
-        // Фильтрация и сглаживание выполнены выше — это нужно для gpsStatus (ACQUIRED).
-        // Запись в Room запрещена: discovery-UUID никогда не регистрируется на сервере,
-        // поэтому syncUnsentPoints() получил бы 404 на каждом батче.
-        if (isDiscovery) return
+        // Discovery-режим: точки пишутся в Room (startGpsStatusObserver в ViewModel
+        // наблюдает за ними и обновляет gpsStatus → ACQUIRED / UNAVAILABLE корректно),
+        // но НЕ синхронизируются с сервером — syncLoop отключён для discovery
+        // (startSyncLoop завершается сразу при isDiscovery == true), а в onDestroy
+        // syncUnsentPoints() также пропускается.
 
         // ── Bearing guard: при медленном движении пеленг ненадёжен ──────────────
         val bearing: Float? = if (
@@ -521,6 +772,12 @@ class LocationTrackingService : Service() {
         // Обновляем опорную точку ПОСЛЕ copy, чтобы использовать уже финальный объект.
         prevCaloriePoint = point
 
+        // Считаем точку записанной синхронно (до scope.launch): буфер гарантированно
+        // флашится в Room, поэтому recordedPointCount == будущему числу точек в Room.
+        // Только для тренировки — discovery-точки пишутся под другим trainingId.
+        // Инкремент на Main-looper'е (callback GPS) — без гонки с чтением в onStartCommand.
+        if (!isDiscovery) recordedPointCount++
+
         scope.launch {
             bufferMutex.withLock {
                 pointBuffer.add(point)
@@ -529,6 +786,10 @@ class LocationTrackingService : Service() {
                 }
             }
         }
+
+        // Обновляем notification: новая скорость должна отразиться на lock screen.
+        // Частота — раз в ~3 сек (INTERVAL_MS_RUNNING), что приемлемо для UX и батареи.
+        rebuildNotification()
     }
 
     /**
@@ -597,21 +858,41 @@ class LocationTrackingService : Service() {
         val batch = pointBuffer.toList()
         locationRepository.savePoints(batch)
         pointBuffer.subList(0, batch.size).clear()
+        // Персистим состояние после фактической записи точек в Room — чтобы при
+        // перезапуске сервиса через START_STICKY gap-индекс паузы был верным.
+        // При shutdown не персистим: onDestroy уже очищает recoveryPrefs, повторная
+        // запись из финального flush оставила бы «мусорное» chronometer-состояние.
+        if (!isDiscovery && !isShuttingDown) persistSessionState()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        isShuttingDown = true
         activeTracker?.stopTracking()
         activeTracker = null
         hintJob?.cancel()
         flushTimerJob?.cancel()
         syncJob?.cancel()
 
-        // Финальный сброс буфера + попытка синхронизации оставшихся точек
+        // Финальный сброс буфера + sync или очистка discovery-точек.
+        // Захватываем значения полей до scope.launch: onStartCommand мог уже переключить
+        // isDiscovery на false (Android переиспользует сервис при stop+start), поэтому
+        // читаем флаги синхронно до старта корутины.
+        val wasDiscovery = isDiscovery
+        val serviceTrainingId = trainingId
         scope.launch {
             try {
                 bufferMutex.withLock { flushBufferLocked() }
-                syncUnsentPoints()
+                if (!wasDiscovery) {
+                    syncUnsentPoints()
+                } else {
+                    // Discovery-режим: syncLoop был отключён (discovery-UUID не зарегистрирован
+                    // на сервере), но точки накопились в Room для gpsStatus-наблюдателя.
+                    // Удаляем их: они временные, хранить смысла нет — в противном случае
+                    // они остаются с isSent=false навсегда и при следующем starте сервиса
+                    // (если isDiscovery случайно сбросится) могут уйти на сервер как 404.
+                    locationRepository.deletePointsForTraining(serviceTrainingId)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to flush and sync unsent points during service shutdown", e)
             } finally {
@@ -628,7 +909,12 @@ class LocationTrackingService : Service() {
 
         // Очищаем crash-recovery — тренировка завершена штатно
         if (::recoveryPrefs.isInitialized) {
-            recoveryPrefs.edit().remove(LocationConfig.KEY_ACTIVE_TRAINING).apply()
+            recoveryPrefs.edit()
+                .remove(LocationConfig.KEY_ACTIVE_TRAINING)
+                .remove(LocationConfig.KEY_SESSION_STARTED_AT)
+                .remove(LocationConfig.KEY_PAUSED_ACCUMULATED_MS)
+                .remove(LocationConfig.KEY_RECORDED_POINT_COUNT)
+                .apply()
         }
 
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -651,21 +937,117 @@ class LocationTrackingService : Service() {
             description = "Уведомление активной тренировки"
             setShowBadge(false)
         }
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, LocationConfig.CHANNEL_ID)
-            .setContentTitle("SmartTracker")
-            .setContentText("Тренировка идёт")
+    /**
+     * Собирает rich-уведомление активной тренировки.
+     *
+     * Содержимое:
+     * - Заголовок "Тренировка идёт"
+     * - Chronometer (live HH:MM:SS) от `sessionStartedAt`. В режиме паузы chronometer
+     *   выключен, выводится статичный текст "На паузе".
+     * - Текущая скорость в км/ч (или "Скорость: —" если ещё неизвестна).
+     * - Action-кнопка Пауза/Продолжить (зависит от `isRecording`).
+     * - Тап на тело → открывает MainActivity (singleTop сохраняет текущий стек).
+     *
+     * `setOnlyAlertOnce(true)` — обновления не вибрируют/не звенят повторно.
+     * `setUsesChronometer` — Android System UI сам тикает таймер раз в секунду
+     * без необходимости вызывать `notify()` для обновления времени.
+     */
+    private fun buildNotification(): Notification {
+        val isPaused = !isRecording
+
+        // Текст под заголовком: "На паузе (HH:MM:SS)" или "Скорость: 9.8 км/ч".
+        // На паузе chronometer выключен (Android System UI не тикает) — поэтому
+        // вшиваем сюда статичный elapsed на момент паузы для контекста.
+        val contentText: String = when {
+            isPaused -> getString(R.string.notif_paused, formatHhMmSs(pausedAccumulatedMs))
+            lastSpeedMps != null -> getString(
+                R.string.notif_speed_kmh_format,
+                (lastSpeedMps ?: 0f) * 3.6f,
+            )
+            else -> getString(R.string.notif_speed_unknown)
+        }
+
+        // PendingIntent кнопки Pause/Resume. EXTRA_RECORDING инвертирует текущее состояние:
+        // если запись идёт — кнопка ставит на паузу (false), иначе возобновляет (true).
+        val toggleIntent = Intent(this, LocationTrackingService::class.java).apply {
+            putExtra(EXTRA_RECORDING, isPaused)   // !isRecording → новое состояние
+        }
+        val togglePending = PendingIntent.getService(
+            this,
+            REQ_TOGGLE_RECORDING,
+            toggleIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val toggleIcon = if (isPaused) R.drawable.ic_notif_play else R.drawable.ic_notif_pause
+        val toggleLabel = getString(
+            if (isPaused) R.string.notif_action_resume else R.string.notif_action_pause
+        )
+
+        val titleRes = if (isPaused) R.string.notif_workout_title_paused
+                       else R.string.notif_workout_title
+        val builder = NotificationCompat.Builder(this, LocationConfig.CHANNEL_ID)
+            .setContentTitle(getString(titleRes))
+            .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_activity_running)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(openAppPendingIntent)
+            .addAction(toggleIcon, toggleLabel, togglePending)
+
+        // Chronometer: показываем только во время активной записи.
+        // На паузе: фриз — chronometer выключен, текст "На паузе" уже в contentText.
+        if (!isPaused && sessionStartedAt > 0L) {
+            builder.setUsesChronometer(true)
+                .setWhen(sessionStartedAt)
+                .setShowWhen(true)
+        } else {
+            builder.setUsesChronometer(false)
+                .setShowWhen(false)
+        }
+
+        return builder.build()
+    }
+
+    /**
+     * Перерисовывает уведомление на основе текущего состояния полей сервиса.
+     * Вызывать при: смене isRecording (pause/resume), новой принятой GPS-точке (новая скорость),
+     * первом GPS-fix (исчезновение hint'а).
+     *
+     * Защищено от вызова в discovery-режиме — там foreground notification не создаётся,
+     * вызов `notify()` после `stopForeground` бесполезен (мог бы создать orphan-уведомление).
+     */
+    private fun rebuildNotification() {
+        if (isDiscovery || trainingId.isBlank()) return
+        notificationManager.notify(LocationConfig.NOTIFICATION_ID, buildNotification())
+    }
+
+    /**
+     * Сохраняет chronometer-состояние тренировки (момент старта, накопленная пауза,
+     * число точек) в recoveryPrefs — для восстановления при перезапуске сервиса
+     * через START_STICKY после убийства процесса ОС.
+     */
+    private fun persistSessionState() {
+        if (!::recoveryPrefs.isInitialized) return
+        recoveryPrefs.edit()
+            .putLong(LocationConfig.KEY_SESSION_STARTED_AT, sessionStartedAt)
+            .putLong(LocationConfig.KEY_PAUSED_ACCUMULATED_MS, pausedAccumulatedMs)
+            .putInt(LocationConfig.KEY_RECORDED_POINT_COUNT, recordedPointCount)
+            .apply()
+    }
 
     companion object {
         private const val TAG = "LocationTrackingService"
+
+        // ── Request codes для PendingIntent уведомления ───────────────────────────
+        // Стабильные значения нужны чтобы FLAG_UPDATE_CURRENT обновлял extras в
+        // существующем PendingIntent, а не создавал новый. Каждой кнопке/тапу — свой код.
+        private const val REQ_OPEN_APP         = 100
+        private const val REQ_TOGGLE_RECORDING = 101
 
         // ── Intent extras ─────────────────────────────────────────────────────────
         const val EXTRA_TRAINING_ID        = "training_id"
@@ -705,7 +1087,8 @@ class LocationTrackingService : Service() {
 
         /**
          * Флаг discovery-режима: GPS ищется при открытии экрана, до старта тренировки.
-         * При true: точки не пишутся в Room, не синхронизируются с сервером.
+         * При true: точки пишутся в Room (нужно для gpsStatus-наблюдателя в ViewModel),
+         * но НЕ синхронизируются с сервером (syncLoop и финальный syncUnsentPoints отключены).
          */
         const val EXTRA_IS_DISCOVERY = "extra_is_discovery"
 
@@ -720,6 +1103,39 @@ class LocationTrackingService : Service() {
             extraBufferCapacity = 0,
         )
         val finishSyncFlow: SharedFlow<Unit> = _finishSyncFlow.asSharedFlow()
+
+        /**
+         * Поток уведомления о смене состояния записи.
+         * Эмитится только при фактической смене — двойные команды с одинаковым значением
+         * не порождают событий (см. ветку EXTRA_RECORDING).
+         *
+         * Используется чтобы синхронизировать UI-state ViewModel когда pause/resume
+         * приходит из notification (а не из UI-кнопки), и чтобы передать точный
+         * gap-индекс паузы (recordedPointCount).
+         *
+         * replay=0: подписчики получают только живые изменения. Это важно — VM не должна
+         * реагировать на «древний» стейт из прошлой сессии тренировки.
+         */
+        private val _recordingStateFlow = MutableSharedFlow<RecordingState>(
+            replay = 0,
+            extraBufferCapacity = 1,
+        )
+        val recordingStateFlow: SharedFlow<RecordingState> = _recordingStateFlow.asSharedFlow()
+
+        /**
+         * Команда обновления trainingId в работающем сервисе.
+         * Отправляется из ViewModel после получения serverUUID при офлайн-старте.
+         * Сервис переключает внутренний trainingId и обновляет crash-recovery prefs.
+         */
+        const val EXTRA_TRAINING_ID_UPDATE = "extra_training_id_update"
+
+        /**
+         * Переход из discovery-режима в тренировку без перезапуска сервиса.
+         * ViewModel отправляет этот Intent вместо stop()+startForegroundService().
+         * onStartCommand() вызывается на живом экземпляре → startForeground() мгновенно,
+         * нет задержки уведомления при первой тренировке.
+         */
+        const val EXTRA_TRANSITION_TO_WORKOUT = "extra_transition_to_workout"
 
         /**
          * Отправляет Intent с флагом записи в уже запущенный сервис.

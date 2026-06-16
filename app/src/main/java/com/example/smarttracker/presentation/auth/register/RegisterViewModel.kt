@@ -365,6 +365,11 @@ class RegisterViewModel @Inject constructor(
                     cooldownJob?.cancel()
                     _state.update { it.copy(isLoading = false) }
                     _events.emit(RegisterEvent.NavigateToHome)
+
+                    // Прогреваем кэш профиля в фоне и не задерживаем завершение регистрации.
+                    viewModelScope.launch {
+                        authRepository.getUserInfo()
+                    }
                 }
                 .onFailure { error ->
                     val errorMessage = ApiErrorHandler.getErrorMessage(error)

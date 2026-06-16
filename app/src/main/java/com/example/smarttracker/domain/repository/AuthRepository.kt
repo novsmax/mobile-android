@@ -1,6 +1,7 @@
 package com.example.smarttracker.domain.repository
 
 import com.example.smarttracker.domain.model.AuthResult
+import java.io.File
 import com.example.smarttracker.domain.model.GoalResponse
 import com.example.smarttracker.domain.model.NicknameCheckResponse
 import com.example.smarttracker.domain.model.RegisterRequest
@@ -96,6 +97,45 @@ interface AuthRepository {
      * weight/height могут быть null если профиль не заполнен.
      */
     suspend fun getUserInfo(): Result<User>
+
+    /**
+     * PATCH /user/edit — обновление профиля пользователя.
+     *
+     * Все параметры nullable — null означает «не менять».
+     * После успеха обновляет кэш профиля и возвращает обновлённого [User].
+     * [birthDate] передаётся в формате ISO 8601 "YYYY-MM-DD".
+     * [gender] — "male" или "female".
+     */
+    suspend fun updateProfile(
+        firstName: String?,
+        lastName: String?,
+        middleName: String?,
+        birthDate: String?,
+        weight: Float?,
+        height: Float?,
+        gender: String?,
+        nickname: String?,
+    ): Result<User>
+
+    /**
+     * POST /user/photo — загрузка фото профиля (multipart/form-data, поле "file").
+     * jpg/png, до 5 МБ. После успеха обновляет кэш профиля через GET /user/.
+     */
+    suspend fun uploadPhoto(file: File): Result<Unit>
+
+    /**
+     * DELETE /user/photo — удаление фото профиля.
+     * Бэкенд автоматически возвращает плейсхолдер. После успеха обновляет кэш.
+     */
+    suspend fun deletePhoto(): Result<Unit>
+
+    /**
+     * DELETE /user/delete — удаление аккаунта.
+     *
+     * После успеха очищает токены и кэш профиля — пользователь должен
+     * быть перенаправлен на экран Login.
+     */
+    suspend fun deleteAccount(): Result<Unit>
 
     /**
      * Flow-флаг принудительного выхода из сессии.

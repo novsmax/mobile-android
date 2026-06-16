@@ -2,13 +2,20 @@ package com.example.smarttracker.data.repository
 
 import android.util.Log
 import com.example.smarttracker.data.cache.RoleGoalCache
+import java.io.File
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import com.example.smarttracker.data.local.RoleConfigStorage
 import com.example.smarttracker.data.local.TokenStorage
+import com.example.smarttracker.data.local.UserProfileCache
 import com.example.smarttracker.data.remote.AuthApiService
 import com.example.smarttracker.data.remote.dto.EmailVerificationDto
 import com.example.smarttracker.data.remote.dto.LoginRequestDto
+import com.example.smarttracker.data.remote.dto.RefreshTokenRequestDto
 import com.example.smarttracker.data.remote.dto.NicknameCheckRequestDto
 import com.example.smarttracker.data.remote.dto.ResendEmailDto
+import com.example.smarttracker.data.remote.dto.UpdateProfileRequestDto
 import com.example.smarttracker.data.remote.dto.toDomain
 import com.example.smarttracker.data.remote.dto.toDto
 import com.example.smarttracker.domain.model.AuthResult
@@ -43,6 +50,7 @@ import javax.inject.Inject
 class AuthRepositoryImpl @Inject constructor(
     private val api: AuthApiService,
     private val tokenStorage: TokenStorage,
+    private val userProfileCache: UserProfileCache,
     private val roleGoalCache: RoleGoalCache,
     private val roleConfigStorage: RoleConfigStorage,
 ) : AuthRepository {
@@ -150,19 +158,18 @@ class AuthRepositoryImpl @Inject constructor(
      * Обновление access token по refresh token.
      * Новая пара токенов заменяет старую в хранилище.
      *
-     * Refresh token передаётся как @Query (не @Body) — подтверждено
-     * сигнатурой FastAPI-роута (нюанс #7 в CONTEXT.md).
+     * Refresh token передаётся в JSON-теле (@Body) — FastAPI-роут использует Body(...).
      *
      * ⚠️ ВАЖНО: Роли НЕ перезагружаются — остаются из TokenStorage (предыдущего входа).
      * Причина: refreshToken вызывается часто (при экспирации access token),
      * не нужно каждый раз ходить на getUserRoles.
-     * 
+     *
      * Если нужна актуальная информация о ролях → вызовите login() повторно.
      * Роли обновляются только при явном входе в систему.
      */
     override suspend fun refreshToken(refreshToken: String): Result<AuthResult> =
         runCatching {
-            val result = api.refreshToken(refreshToken).toDomain()
+            val result = api.refreshToken(RefreshTokenRequestDto(refreshToken)).toDomain()
             
             // Сохранить токены, роли остаются из TokenStorage (уже актуальные)
             val currentRoles = tokenStorage.getUserRoles()
@@ -222,9 +229,69 @@ class AuthRepositoryImpl @Inject constructor(
     /**
      * Профиль текущего пользователя: вес, рост, дата рождения, пол.
      * Используется WorkoutStartViewModel для расчёта калорий методом MET.
+     *
+     * Стратегия cache-first:
+     * 1. Проверяем локальный кэш (EncryptedSharedPreferences).
+     * 2. Если кэш есть — возвращаем мгновенно, без сетевого запроса.
+     * 3. Если кэш пуст — идём в сеть, сохраняем результат в кэш.
+     *
+     * Кэш прогревается при входе в аккаунт (LoginViewModel / RegisterViewModel).
+     * Сбрасывается при выходе (AppViewModel.logout).
      */
-    override suspend fun getUserInfo(): Result<User> =
-        runCatching { api.getUserInfo().toDomain() }
+    override suspend fun getUserInfo(): Result<User> = runCatching {
+        userProfileCache.get()?.let { return Result.success(it) }
+
+        val user = api.getUserInfo().toDomain()
+        userProfileCache.save(user)
+        user
+    }
+
+    /**
+     * PATCH /user/edit — обновление профиля.
+     * Сразу сохраняет обновлённый профиль в кэш, чтобы ProfileScreen
+     * показал свежие данные без лишнего сетевого запроса.
+     */
+    override suspend fun updateProfile(
+        firstName: String?,
+        lastName: String?,
+        middleName: String?,
+        birthDate: String?,
+        weight: Float?,
+        height: Float?,
+        gender: String?,
+        nickname: String?,
+    ): Result<User> = runCatching {
+        val dto = UpdateProfileRequestDto(firstName, lastName, middleName, birthDate, weight, height, gender, nickname)
+        val user = api.updateProfile(dto).toDomain()
+        userProfileCache.save(user)
+        user
+    }
+
+    override suspend fun uploadPhoto(file: File): Result<Unit> = runCatching {
+        val mimeType = if (file.extension.equals("png", ignoreCase = true)) "image/png" else "image/jpeg"
+        val body = file.asRequestBody(mimeType.toMediaType())
+        val part = MultipartBody.Part.createFormData("file", file.name, body)
+        api.uploadPhoto(part)
+        // Ответ пустой — получаем новый image_path через GET /user/
+        val updated = api.getUserInfo().toDomain()
+        userProfileCache.save(updated)
+    }
+
+    override suspend fun deletePhoto(): Result<Unit> = runCatching {
+        api.deletePhoto()
+        val updated = api.getUserInfo().toDomain()
+        userProfileCache.save(updated)
+    }
+
+    /**
+     * DELETE /user/delete — удаление аккаунта.
+     * Очищает токены и кэш профиля после успешного ответа сервера.
+     */
+    override suspend fun deleteAccount(): Result<Unit> = runCatching {
+        api.deleteAccount()
+        tokenStorage.clearAll()
+        userProfileCache.clear()
+    }
 
     /**
      * Делегирует в TokenStorage.sessionExpiredFlow.

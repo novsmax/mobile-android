@@ -1,5 +1,6 @@
 package com.example.smarttracker.presentation.auth.login
 
+import com.example.smarttracker.domain.repository.AuthRepository
 import com.example.smarttracker.domain.usecase.LoginUseCase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -28,7 +29,7 @@ class LoginViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
-        viewModel = LoginViewModel(mock<LoginUseCase>())
+        viewModel = LoginViewModel(mock<LoginUseCase>(), mock<AuthRepository>())
     }
 
     @After

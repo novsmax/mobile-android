@@ -1,16 +1,8 @@
 package com.example.smarttracker.presentation.workout
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,19 +13,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.smarttracker.R
+import com.example.smarttracker.presentation.common.AppTab
+import com.example.smarttracker.presentation.common.SmartTrackerBottomBar
+import com.example.smarttracker.presentation.menu.MenuScreen
 import com.example.smarttracker.presentation.theme.ColorPrimary
-import com.example.smarttracker.presentation.theme.ColorSecondary
 import com.example.smarttracker.presentation.theme.geologicaFontFamily
+import com.example.smarttracker.presentation.calendar.TrainingHistoryScreen
 import com.example.smarttracker.presentation.workout.start.WorkoutStartScreen
 import com.example.smarttracker.presentation.workout.start.WorkoutStartViewModel
 
@@ -41,40 +33,49 @@ import com.example.smarttracker.presentation.workout.start.WorkoutStartViewModel
  * Главный экран приложения после авторизации.
  * Содержит три вкладки: Старт, Тренировки, Меню.
  *
- * Заменяет замороженный HomeScreen — активируется через AppNavGraph по маршруту Screen.Home.
+ * ViewModel хоистится здесь (а не внутри ветки when), чтобы:
+ *  - сохранять оверлей итогов тренировки между переключениями вкладок;
+ *  - закрывать оверлей при выборе соседней вкладки.
  */
 @Composable
 fun WorkoutHomeScreen(
-    onBack: () -> Unit = {},
     onLogout: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {},
 ) {
     var currentTab by remember { mutableStateOf(WorkoutTab.START) }
 
+    // ViewModel живёт на всём времени Home — оверлей итогов переживает переключения
+    // вкладок, а закрытие оверлея при смене вкладки делается ниже через side-effect.
+    val viewModel: WorkoutStartViewModel = hiltViewModel()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Принудительный выход при истечении сессии (оба токена невалидны).
+    // Срабатывает когда TokenRefreshAuthenticator получает 401 на /auth/refresh.
+    val sessionExpired by viewModel.sessionExpired.collectAsStateWithLifecycle()
+    LaunchedEffect(sessionExpired) {
+        if (sessionExpired) onLogout()
+    }
+
+    // Закрываем оверлей при переходе с вкладки «Старт» на любую другую —
+    // пользователь явно ушёл с экрана итогов, состояние сбрасывается на «можно начать».
+    LaunchedEffect(currentTab) {
+        if (currentTab != WorkoutTab.START) viewModel.onCloseSummaryOverlay()
+    }
+
     Scaffold(
         bottomBar = {
-            WorkoutBottomBar(
-                currentTab = currentTab,
-                onTabSelected = { currentTab = it },
+            // Используем общий компонент; ordinal совпадает с AppTab.START/WORKOUTS/MENU
+            SmartTrackerBottomBar(
+                selectedIndex = currentTab.ordinal,
+                onTabSelected = { currentTab = WorkoutTab.entries[it] },
             )
         },
     ) { padding ->
         when (currentTab) {
             WorkoutTab.START -> {
-                val viewModel: WorkoutStartViewModel = hiltViewModel()
-                val state by viewModel.state.collectAsStateWithLifecycle()
-
-                // Принудительный выход при истечении сессии (оба токена невалидны).
-                // Срабатывает когда TokenRefreshAuthenticator получает 401 на /auth/refresh.
-                // onLogout() очищает back stack и переводит на экран Login.
-                val sessionExpired by viewModel.sessionExpired.collectAsStateWithLifecycle()
-                LaunchedEffect(sessionExpired) {
-                    if (sessionExpired) onLogout()
-                }
-
                 WorkoutStartScreen(
                     state = state,
                     padding = padding,
-                    onBack = onBack,
                     onStartClick = viewModel::onStartWorkoutClick,
                     onTypeSelected = viewModel::onQuickTypeSelected,
                     onSheetTypeSelected = viewModel::onSheetTypeSelected,
@@ -83,69 +84,31 @@ fun WorkoutHomeScreen(
                     onMapTilesFailed = viewModel::onMapTilesFailed,
                     onToggleFavorite = viewModel::onToggleFavorite,
                     onSearchQueryChange = viewModel::onSearchQueryChange,
+                    onCloseSummary = viewModel::onCloseSummaryOverlay,
+                    onToggleFullscreenMap = viewModel::onToggleFullscreenMap,
+                    onDeleteHistoryTraining = viewModel::onDeleteHistoryTraining,
                 )
             }
-            WorkoutTab.WORKOUTS -> PlaceholderScreen(label = stringResource(R.string.tab_workouts), padding = padding)
-            WorkoutTab.MENU    -> MenuScreen(padding = padding, onLogout = onLogout)
+            WorkoutTab.WORKOUTS -> TrainingHistoryScreen(
+                    padding = padding,
+                    onNavigateToStart = { currentTab = WorkoutTab.START },
+                    onTrainingClick = { item, activityName ->
+                        currentTab = WorkoutTab.START
+                        viewModel.showHistorySummary(item, activityName)
+                    },
+                )
+            WorkoutTab.MENU    -> MenuScreen(
+                padding = padding,
+                onNavigateToProfile = onNavigateToProfile,
+            )
         }
     }
 }
 
-// ── Нижний бар ────────────────────────────────────────────────────────────────
+// ── Вкладки главного экрана ───────────────────────────────────────────────────
+// Порядок должен совпадать с AppTab.START/WORKOUTS/MENU (используется .ordinal)
 
 private enum class WorkoutTab { START, WORKOUTS, MENU }
-
-@Composable
-private fun WorkoutBottomBar(
-    currentTab: WorkoutTab,
-    onTabSelected: (WorkoutTab) -> Unit,
-) {
-    NavigationBar(containerColor = Color.White) {
-
-        // Все три вкладки имеют одинаковое поведение:
-        // при выборе — иконка обёрнута в бирюзовый круг, цвет иконки остаётся тёмным
-        listOf(
-            Triple(WorkoutTab.START,    R.drawable.ic_nav_start,    stringResource(R.string.tab_start)),
-            Triple(WorkoutTab.WORKOUTS, R.drawable.ic_nav_workouts, stringResource(R.string.tab_workouts)),
-            Triple(WorkoutTab.MENU,     R.drawable.ic_nav_menu,     stringResource(R.string.tab_menu)),
-        ).forEach { (tab, iconRes, label) ->
-        NavigationBarItem(
-            selected = currentTab == tab,
-            onClick = { onTabSelected(tab) },
-            icon = {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(
-                            color = if (currentTab == tab) ColorSecondary else Color.Transparent,
-                            shape = CircleShape,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(iconRes),
-                        contentDescription = label,
-                        tint = ColorPrimary,
-                        modifier = Modifier.size(38.dp),
-                    )
-                }
-            },
-            label = {
-                Text(
-                    text = label,
-                    fontFamily = geologicaFontFamily,
-                    fontWeight = FontWeight.Light,
-                    fontSize = 14.sp,
-                    color = ColorPrimary,
-                )
-            },
-            colors = NavigationBarItemDefaults.colors(
-                indicatorColor = Color.Transparent,
-            ),
-        )
-        }
-    }
-}
 
 // ── Заглушка для незаконченных вкладок ────────────────────────────────────────
 
@@ -171,24 +134,3 @@ private fun PlaceholderScreen(
     }
 }
 
-// ── Вкладка «Меню» (временная заглушка) ──────────────────────────────────────
-
-@Composable
-private fun MenuScreen(
-    padding: androidx.compose.foundation.layout.PaddingValues,
-    onLogout: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(padding),
-        contentAlignment = Alignment.Center,
-    ) {
-        Button(onClick = onLogout) {
-            Text(
-                text = stringResource(R.string.logout),
-                fontFamily = geologicaFontFamily,
-            )
-        }
-    }
-}

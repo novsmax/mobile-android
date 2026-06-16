@@ -2,6 +2,7 @@ package com.example.smarttracker.presentation.auth.login
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.smarttracker.domain.repository.AuthRepository
 import com.example.smarttracker.domain.usecase.LoginUseCase
 import com.example.smarttracker.utils.ApiErrorHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,7 +33,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val loginUseCase: LoginUseCase
+    private val loginUseCase: LoginUseCase,
+    private val authRepository: AuthRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LoginUiState())
@@ -82,6 +84,13 @@ class LoginViewModel @Inject constructor(
                 .onSuccess { _ ->
                     _state.update { it.copy(isLoading = false) }
                     _events.emit(LoginEvent.NavigateToHome)
+
+                    // Прогреваем кэш профиля без блокировки навигации на Home.
+                    // Ошибка здесь не блокирует вход — ProfileScreen сделает
+                    // повторный запрос самостоятельно при первом открытии.
+                    viewModelScope.launch {
+                        authRepository.getUserInfo()
+                    }
                 }
                 .onFailure { error ->
                     val errorMessage = ApiErrorHandler.getErrorMessage(error)
@@ -113,6 +122,10 @@ class LoginViewModel @Inject constructor(
 
         if (s.email.isBlank()) {
             return "Введите email"
+        }
+
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(s.email).matches()) {
+            return "Некорректный формат email"
         }
 
         if (s.password.isBlank()) {

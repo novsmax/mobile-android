@@ -7,8 +7,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smarttracker.data.location.LocationConfig
 import com.example.smarttracker.data.location.LocationTrackingService
+import com.example.smarttracker.utils.formatHhMmSs
+import com.example.smarttracker.data.work.OfflineFinishScheduler
 import com.example.smarttracker.data.location.OfflineMapManager
+import com.example.smarttracker.domain.model.ActiveTrainingConflictException
 import com.example.smarttracker.domain.model.Gender
+import com.example.smarttracker.domain.model.NetworkUnavailableException
 import com.example.smarttracker.domain.model.LocationPoint
 import com.example.smarttracker.domain.model.User
 import com.example.smarttracker.domain.model.WorkoutType
@@ -16,6 +20,9 @@ import com.example.smarttracker.domain.repository.AuthRepository
 import com.example.smarttracker.domain.repository.LocationRepository
 import com.example.smarttracker.domain.repository.WorkoutRepository
 import com.example.smarttracker.domain.usecase.CalculateTrainingStatsUseCase
+import com.example.smarttracker.presentation.workout.summary.SummaryOrigin
+import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
+import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -24,17 +31,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.example.smarttracker.domain.model.TrainingHistoryItem
+import com.example.smarttracker.presentation.workout.summary.CumulativeTrackData
 import java.time.Instant
 import java.time.LocalDate
 import java.time.Period
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -59,6 +71,7 @@ class WorkoutStartViewModel @Inject constructor(
     private val calculateTrainingStatsUseCase: CalculateTrainingStatsUseCase,
     private val offlineMapManager: OfflineMapManager,
     private val authRepository: AuthRepository,
+    private val offlineFinishScheduler: OfflineFinishScheduler,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -113,6 +126,19 @@ class WorkoutStartViewModel @Inject constructor(
         /** GPS-точки текущей тренировки для рисования трека на карте */
         val trackPoints: List<LocationPoint> = emptyList(),
         /**
+         * Индексы первой точки после каждого resume (0-based в [trackPoints]).
+         * Пара (i-1, i) где i ∈ pauseGapIndices — gap-пара: точки разделены паузой,
+         * haversine и разница timestampUtc не отражают реальное движение.
+         *
+         * Значения приходят из сервиса (`RecordingState.recordedPointCount`) — это точный
+         * индекс, по которому ляжет первая пост-резюм точка. ViewModel не вычисляет его
+         * сам по размеру [trackPoints]: тот отстаёт от буфера сервиса на 1-2 точки.
+         *
+         * Используется и в live-расчёте дистанции ([observeTrackingData]), и в
+         * [buildCumulativeData] (summary) — обе пропускают gap-пары по этому набору.
+         */
+        val pauseGapIndices: List<Int> = emptyList(),
+        /**
          * true когда MapLibre не смог загрузить тайлы (нет сети + нет кэша).
          * Устанавливается через callback onDidFailLoadingMap из MapViewComposable.
          * При завершении тренировки сбрасывается в false.
@@ -130,6 +156,19 @@ class WorkoutStartViewModel @Inject constructor(
          * null = тренировок ещё не было, карта покажет дефолтное положение.
          */
         val lastKnownLocation: LocationPoint? = null,
+        /**
+         * Снимок итогов завершённой тренировки. Не null после нажатия «Завершить» и до
+         * закрытия оверлея. Используется UI-слоем для отрисовки слоя итогов поверх карты —
+         * без навигации на отдельный экран. Карта (та же composable-инстанция) остаётся
+         * жива, поэтому LocationComponent не разбирается → нет крашей анимаций MapLibre.
+         */
+        val summaryOverlay: WorkoutSummaryUiState? = null,
+        /**
+         * Полноэкранный режим карты внутри оверлея итогов (Figma 723:460):
+         * скрывает шапку/активность/статистику и показывает только карту с overlay-картой
+         * статистики и нижним слайдером.
+         */
+        val isMapFullscreen: Boolean = false,
     ) {
         /** true когда GPS-сигнал получен */
         val isGpsActive: Boolean get() = gpsStatus == GpsStatus.ACQUIRED
@@ -145,6 +184,13 @@ class WorkoutStartViewModel @Inject constructor(
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     /**
+     * unix-ms момента первого нажатия «Начать тренировку».
+     * Фиксируется один раз при старте и используется в снимке итогов для отображения даты.
+     * 0L означает, что тренировка ещё не начиналась.
+     */
+    private var trainingStartTimestamp: Long = 0L
+
+    /**
      * Сигнал принудительного выхода из сессии (оба токена истекли).
      * WorkoutHomeScreen наблюдает этот flow и при true вызывает onLogout().
      * Делегирует в authRepository.sessionExpiredFlow → tokenStorage.sessionExpiredFlow.
@@ -155,13 +201,10 @@ class WorkoutStartViewModel @Inject constructor(
     // сбрасывается в null при завершении (onFinishClick).
     private var currentTrainingId: String? = null
 
-    /**
-     * Количество точек в Room на момент паузы.
-     * При возобновлении observeTrackingData использует max(processedCount, якорь),
-     * чтобы пропустить дистанцию от последней точки до паузы до первой точки после.
-     * @Volatile: пишется из Main-thread (onPauseClick), читается из Dispatchers.Default.
-     */
-    @Volatile private var resumeAnchorPointCount: Int = 0
+    // true если сервер подтвердил регистрацию тренировки (startTraining вернул serverUUID).
+    // false = тренировка начата офлайн с localUUID, при финише нужно сохранить typeActivId
+    // в PendingFinish чтобы SyncGpsPointsWorker смог зарегистрировать её позже.
+    private var isTrainingRegisteredOnServer: Boolean = false
 
     // UUID и Job discovery-фазы: GPS ищется сразу при открытии экрана,
     // до того как пользователь нажмёт «Начать тренировку».
@@ -179,13 +222,18 @@ class WorkoutStartViewModel @Inject constructor(
     // Наблюдатель за GPS-точками: обновляет GPS-статус и статистику
     private var observerJob: Job? = null
 
+    // Загрузка GPS-трека для превью истории. Отменяется в onCloseSummaryOverlay,
+    // чтобы поздний ответ сети не возрождал уже закрытый оверлей.
+    private var historyDetailJob: Job? = null
+
     init {
         // Устанавливаем текущую дату
         val currentDate = formatCurrentDate()
         _state.update { it.copy(currentDate = currentDate) }
 
-        loadWorkoutTypes()
+        collectWorkoutTypes()
         loadUserProfile()
+        observeServiceRecordingState()
         val favIds = loadFavoriteIds()
         if (favIds.isNotEmpty()) _state.update { it.copy(favoriteIds = favIds) }
         // Сначала читаем последнюю сохранённую точку для начального центрирования карты.
@@ -197,6 +245,83 @@ class WorkoutStartViewModel @Inject constructor(
             if (last != null) _state.update { it.copy(lastKnownLocation = last) }
             // GPS стартует сразу после первичного чтения — иконка по-прежнему видна без нажатия «Начать».
             startDiscoveryGps()
+        }
+    }
+
+    /**
+     * Подписывается на поток состояния записи из сервиса.
+     *
+     * Сервис — источник истины для двух вещей:
+     *  1. Факт pause/resume — если он пришёл из notification, синхронизируем UI-state.
+     *  2. Точный gap-индекс (`recordedPointCount`) — сервис знает реальное число
+     *     записанных точек, VM по [UiState.trackPoints] его надёжно не вычислит.
+     *
+     * gap-индекс пишем в [UiState.pauseGapIndices] ВСЕГДА на событии паузы — вне
+     * зависимости от того, кто инициировал (UI-кнопка или notification). Поэтому
+     * [applyPauseLocally] больше не трогает pauseGapIndices.
+     *
+     * Защита от рекурсии: applyPauseLocally/applyResumeLocally вызываем только если
+     * `state.isTracking` ещё не синхронизирован — иначе изменение пришло из VM,
+     * обратный вызов setRecording не делаем.
+     */
+    private fun observeServiceRecordingState() {
+        viewModelScope.launch {
+            LocationTrackingService.recordingStateFlow.collect { rs ->
+                val current = _state.value
+                if (!rs.isRecording) {
+                    // Точный gap-индекс от сервиса — индекс первой пост-резюм точки.
+                    // dedup: одна пауза эмитится один раз, но защищаемся от повторов.
+                    if (rs.recordedPointCount !in current.pauseGapIndices) {
+                        _state.update {
+                            it.copy(pauseGapIndices = it.pauseGapIndices + rs.recordedPointCount)
+                        }
+                    }
+                    if (current.isTracking) applyPauseLocally()
+                } else {
+                    if (!current.isTracking && current.isWorkoutStarted) applyResumeLocally()
+                }
+            }
+        }
+    }
+
+    /**
+     * Применяет паузу к UI-state без обращения к сервису: замораживает таймер.
+     * gap-индекс здесь НЕ пишется — это делает [observeServiceRecordingState]
+     * по точному значению из сервиса.
+     */
+    private fun applyPauseLocally() {
+        pausedElapsedMs = _state.value.elapsedMs
+        timerJob?.cancel()
+        _state.update { it.copy(isTracking = false) }
+    }
+
+    /**
+     * Возобновляет UI-state без обращения к сервису.
+     * Используется обработчиком события из notification — сервис уже в записи,
+     * нужно только синхронизировать таймер и флаг tracking.
+     */
+    private fun applyResumeLocally() {
+        startElapsedTimer()
+        _state.update { it.copy(isTracking = true) }
+    }
+
+    /**
+     * Запускает (или перезапускает) корутину-таймер тренировки.
+     * `startTimeMs` сдвигается в прошлое на [pausedElapsedMs] — таймер продолжается
+     * с накопленного времени, пауза не учитывается.
+     */
+    private fun startElapsedTimer() {
+        startTimeMs = System.currentTimeMillis() - pausedElapsedMs
+        timerJob?.cancel()
+        timerJob = viewModelScope.launch {
+            while (isActive) {
+                val elapsed = System.currentTimeMillis() - startTimeMs
+                _state.update { it.copy(
+                    elapsedMs    = elapsed,
+                    timerDisplay = formatDuration(elapsed),
+                ) }
+                delay(1000)
+            }
         }
     }
 
@@ -251,38 +376,50 @@ class WorkoutStartViewModel @Inject constructor(
         }
     }
 
-    private fun loadWorkoutTypes() {
+    private fun collectWorkoutTypes() {
         viewModelScope.launch {
             _state.update { it.copy(isTypesLoading = true) }
-            workoutRepository.getWorkoutTypes()
-                .onSuccess { types ->
+            workoutRepository.workoutTypesFlow()
+                .catch { e ->
                     _state.update { it.copy(
-                        workoutTypes  = types,
-                        pinnedTypes   = types.take(3),
-                        selectedType  = types.firstOrNull(),
                         isTypesLoading = false,
+                        errorMessage = e.localizedMessage ?: "Ошибка загрузки типов",
                     ) }
                 }
-                .onFailure { error ->
-                    _state.update { it.copy(
-                        isTypesLoading = false,
-                        errorMessage = error.localizedMessage ?: "Ошибка загрузки типов тренировок",
-                    ) }
+                .collect { types ->
+                    _state.update { current ->
+                        // Сохраняем выбор пользователя при фоновом обновлении списка.
+                        val selected = current.selectedType
+                            ?.let { s -> types.find { it.id == s.id } }
+                            ?: types.firstOrNull()
+                        // Первая эмиссия: берём первые 3; последующие: обновляем iconFile, порядок не трогаем.
+                        val pinned = if (current.pinnedTypes.isEmpty())
+                            types.take(3)
+                        else
+                            current.pinnedTypes.map { p -> types.find { it.id == p.id } ?: p }
+                        current.copy(
+                            workoutTypes   = types,
+                            pinnedTypes    = pinned,
+                            selectedType   = selected,
+                            isTypesLoading = false,
+                        )
+                    }
                 }
         }
     }
 
     /**
-     * Нажатие «Начать тренировку» — регистрирует тренировку на сервере,
-     * затем запускает таймер и сервис GPS-трекинга.
+     * Нажатие «Начать тренировку» — немедленно стартует foreground-сервис (уведомление
+     * появляется мгновенно), затем в фоне регистрирует тренировку на сервере.
      *
      * При возобновлении после паузы trainingId уже существует — сервер не вызывается повторно.
-     * При ошибке сети — fallback на локальный UUID с предупреждением пользователю.
+     * При ошибке сети — остаётся на localUUID; SyncGpsPointsWorker зарегистрирует тренировку
+     * на сервере при появлении сети через [typeActivId] в PendingFinishEntity.
      */
     fun onStartWorkoutClick() {
         val selectedType = _state.value.selectedType ?: return
 
-        // Защита от двойного тапа: пока идёт сетевой запрос, игнорируем повторные нажатия
+        // Защита от двойного тапа
         if (_state.value.isStarting) return
 
         // Возобновление после паузы — ID уже получен, сервер не вызываем
@@ -291,26 +428,144 @@ class WorkoutStartViewModel @Inject constructor(
             return
         }
 
-        // Первый старт — регистрируем тренировку на сервере
-        viewModelScope.launch {
-            _state.update { it.copy(isStarting = true) }
+        // Генерируем localUUID и стартуем сервис немедленно — уведомление появляется сразу
+        val localUUID = UUID.randomUUID().toString()
+        currentTrainingId = localUUID
+        isTrainingRegisteredOnServer = false
+        _state.update { it.copy(isStarting = true) }
+        resumeTracking()
 
+        // Регистрируем тренировку на сервере в фоне параллельно с GPS-трекингом
+        viewModelScope.launch {
             workoutRepository.startTraining(selectedType.id)
                 .onSuccess { result ->
-                    currentTrainingId = result.activeTrainingId
+                    // Guard: onFinishClick мог сработать пока startTraining был in-flight.
+                    // currentTrainingId == null означает, что тренировка уже завершена.
+                    // Re-key нельзя делать: offline-цепочка для localUUID уже enqueued.
+                    // Открытая serverUUID-тренировка закроется через finishOrphanedAndRetryStart
+                    // при следующем старте.
+                    if (currentTrainingId == null) {
+                        Log.w(TAG, "startTraining returned after onFinishClick — discarding re-key to ${result.activeTrainingId}")
+                        _state.update { it.copy(isStarting = false) }
+                        return@onSuccess
+                    }
+                    val serverUUID = result.activeTrainingId
+                    if (serverUUID != localUUID) {
+                        // Intent сначала: сервис прекращает писать под localUUID
+                        // до re-key в Room — уменьшает окно гонки до минимума
+                        context.startService(
+                            Intent(context, LocationTrackingService::class.java)
+                                .putExtra(LocationTrackingService.EXTRA_TRAINING_ID_UPDATE, serverUUID)
+                        )
+                        observerJob?.cancel()
+                        locationRepository.rekeyTrainingId(localUUID, serverUUID)
+                        currentTrainingId = serverUUID
+                        observeTrackingData(serverUUID)
+                    }
+                    isTrainingRegisteredOnServer = true
                     _state.update { it.copy(isStarting = false) }
-                    resumeTracking()
                 }
-                .onFailure {
-                    // Fallback: локальный UUID, тренировка записывается офлайн
-                    currentTrainingId = UUID.randomUUID().toString()
-                    _state.update { it.copy(
-                        isStarting = false,
-                        errorMessage = "Нет связи с сервером. Тренировка сохраняется локально.",
-                    ) }
-                    resumeTracking()
+                .onFailure { error ->
+                    when (error) {
+                        is ActiveTrainingConflictException -> {
+                            // На сервере незавершённая тренировка — завершаем её и повторяем старт.
+                            // Сервис уже запущен с localUUID — пауза на время resolve.
+                            finishOrphanedAndRetryStart(selectedType.id, localUUID)
+                        }
+                        else -> {
+                            // Нет сети или другая ошибка — остаёмся на localUUID.
+                            // SyncGpsPointsWorker зарегистрирует тренировку при появлении сети.
+                            val message = if (error is NetworkUnavailableException) {
+                                "Нет связи с сервером. Тренировка сохраняется локально."
+                            } else {
+                                "Не удалось зарегистрировать тренировку. Тренировка сохраняется локально."
+                            }
+                            _state.update { it.copy(
+                                isStarting = false,
+                                errorMessage = message,
+                            ) }
+                        }
+                    }
                 }
         }
+    }
+
+    /**
+     * Автоматически завершает «осиротевшую» тренировку на сервере и повторяет старт.
+     *
+     * Вызывается когда сервер вернул 400 (ActiveTrainingConflictException). Сервис уже
+     * запущен с [localUUID] — запись приостанавливается на время resolve, затем
+     * возобновляется с правильным serverUUID (или остаётся на localUUID при ошибке сети).
+     *
+     * Флоу: пауза → GET /training/active → POST save_training → POST start → re-key → resume.
+     */
+    private suspend fun finishOrphanedAndRetryStart(typeActivId: Int, localUUID: String) {
+        // Приостанавливаем запись GPS-точек на время resolve
+        LocationTrackingService.setRecording(context, false)
+
+        val activeId = workoutRepository.getActiveTraining().getOrNull()
+        if (activeId == null) {
+            Log.w(TAG, "finishOrphanedAndRetryStart: getActiveTraining() failed, keeping localUUID")
+            isTrainingRegisteredOnServer = false
+            _state.update { it.copy(
+                isStarting = false,
+                errorMessage = "Не удалось завершить предыдущую тренировку. Тренировка сохраняется локально.",
+            ) }
+            LocationTrackingService.setRecording(context, true)
+            return
+        }
+
+        workoutRepository.saveTraining(
+            trainingId          = activeId,
+            timeEnd             = Instant.now()
+                .atZone(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            totalDistanceMeters = null,
+            totalKilocalories   = null,
+        ).onFailure { e ->
+            Log.w(TAG, "finishOrphanedAndRetryStart: saveTraining failed, keeping localUUID", e)
+            isTrainingRegisteredOnServer = false
+            _state.update { it.copy(
+                isStarting = false,
+                errorMessage = "Не удалось сохранить предыдущую тренировку на сервер. Новая тренировка сохраняется локально.",
+            ) }
+            LocationTrackingService.setRecording(context, true)
+            return
+        }
+
+        // Передаём реальное время старта: между resumeTracking() и конфликтом (3 сетевых
+        // вызова) прошло 1–5 сек — GPS-точки уже есть с timestampUtc < time_start сервера.
+        // timeStart фиксирует момент нажатия «Начать», как и в offline-финише через WorkManager.
+        workoutRepository.startTraining(
+            typeActivId,
+            Instant.ofEpochMilli(trainingStartTimestamp)
+                .atZone(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        )
+            .onSuccess { result ->
+                val serverUUID = result.activeTrainingId
+                // Intent сначала — сервис переключается на serverUUID до re-key в Room
+                context.startService(
+                    Intent(context, LocationTrackingService::class.java)
+                        .putExtra(LocationTrackingService.EXTRA_TRAINING_ID_UPDATE, serverUUID)
+                )
+                observerJob?.cancel()
+                locationRepository.rekeyTrainingId(localUUID, serverUUID)
+                currentTrainingId = serverUUID
+                isTrainingRegisteredOnServer = true
+                observeTrackingData(serverUUID)
+                _state.update { it.copy(isStarting = false) }
+                LocationTrackingService.setRecording(context, true)
+            }
+            .onFailure {
+                Log.e(TAG, "finishOrphanedAndRetryStart: retry startTraining failed", it)
+                isTrainingRegisteredOnServer = false
+                _state.update { it.copy(
+                    isStarting = false,
+                    errorMessage = "Нет связи с сервером. Тренировка сохраняется локально.",
+                ) }
+                LocationTrackingService.setRecording(context, true)
+            }
     }
 
     /**
@@ -322,33 +577,42 @@ class WorkoutStartViewModel @Inject constructor(
         val isFirstStart = _state.value.isWorkoutStarted.not()
 
         if (isFirstStart) {
+            // Фиксируем момент первого старта — используется на экране итогов для даты.
+            // Пауза/возобновление не сбрасывают это значение.
+            trainingStartTimestamp = System.currentTimeMillis()
             discoveryObserverJob?.cancel()
             discoveryObserverJob = null
-            stopLocationService()
+            // Захватываем discId до обнуления — нужен для асинхронного удаления из Room.
+            val discId = discoveryTrainingId
             discoveryTrainingId = null
-        }
-
-        startTimeMs = System.currentTimeMillis() - pausedElapsedMs
-        timerJob = viewModelScope.launch {
-            while (isActive) {
-                val elapsed = System.currentTimeMillis() - startTimeMs
-                _state.update { it.copy(
-                    elapsedMs    = elapsed,
-                    timerDisplay = formatDuration(elapsed),
-                ) }
-                delay(1000)
+            // Переводим сервис из discovery в тренировку без цикла stop/start:
+            // EXTRA_TRANSITION_TO_WORKOUT вызывает onStartCommand() на живом экземпляре
+            // → startForeground() срабатывает мгновенно без задержки destroy/create.
+            transitionToWorkout(trainingId)
+            // Discovery-точки удаляем асинхронно. Сервис уже переключил trainingId,
+            // поэтому новые точки пишутся под workout-id, а старые (discId) ждут удаления.
+            if (discId != null) {
+                viewModelScope.launch {
+                    locationRepository.deletePointsForTraining(discId)
+                }
             }
         }
 
+        startElapsedTimer()
+
         _state.update { it.copy(
-            isTracking      = true,
+            isTracking       = true,
             isWorkoutStarted = true,
-            // При первом старте переходим в SEARCHING, при возобновлении GPS уже работает
-            gpsStatus       = if (isFirstStart) GpsStatus.SEARCHING else _state.value.gpsStatus,
+            // При первом старте сохраняем ACQUIRED если GPS уже был пойман в discovery-режиме —
+            // физически сигнал не пропадал, просто сменился trainingId.
+            // SEARCHING ставим только если GPS ещё не был получен.
+            gpsStatus        = if (isFirstStart && it.gpsStatus != GpsStatus.ACQUIRED)
+                                   GpsStatus.SEARCHING
+                               else
+                                   it.gpsStatus,
         ) }
 
         if (isFirstStart) {
-            startLocationService(trainingId)
             observeTrackingData(trainingId)
         } else {
             // Возобновление после паузы: разрешаем запись точек снова
@@ -358,22 +622,25 @@ class WorkoutStartViewModel @Inject constructor(
 
     /** Нажатие «Пауза» — замораживает таймер; GPS продолжает работать, запись в Room останавливается */
     fun onPauseClick() {
-        pausedElapsedMs = _state.value.elapsedMs
-        timerJob?.cancel()
-        _state.update { it.copy(isTracking = false) }
-        // Запоминаем сколько точек было до паузы — observeTrackingData пропустит
-        // расстояние от этих точек до первой точки после возобновления
-        resumeAnchorPointCount = _state.value.trackPoints.size
+        applyPauseLocally()
         // GPS-трекер продолжает работать (сервис жив), но точки в Room не пишутся
         LocationTrackingService.setRecording(context, false)
     }
 
     /**
-     * Нажатие «Завершить» — останавливает трекинг, отправляет итоги на сервер
-     * и сбрасывает статистику в ноль.
+     * Нажатие «Завершить» — останавливает трекинг и показывает оверлей с итогами
+     * поверх текущего экрана. Без навигации: тот же composable WorkoutStartScreen
+     * рендерит оверлей через `state.summaryOverlay`. Это сохраняет ту же инстанцию
+     * MapView, поэтому LocationComponent не разбирается → нет крашей анимаций MapLibre
+     * (бывшая проблема с переходом на отдельный WorkoutSummaryScreen).
      *
      * saveTraining выполняется fire-and-forget: при ошибке данные остаются в Room,
      * пользователь не блокируется.
+     *
+     * Сброс live-полей (trackPoints, timer, distance) выполняется не здесь, а
+     * в [onCloseSummaryOverlay] — это позволяет карте показывать тот же маршрут
+     * во время оверлея и переключаться в полноэкранный режим без перерисовки.
+     * Discovery-GPS тоже перезапускается при закрытии оверлея, не сейчас.
      */
     fun onFinishClick() {
         val trainingId = currentTrainingId
@@ -382,51 +649,404 @@ class WorkoutStartViewModel @Inject constructor(
         timerJob?.cancel()
         stopLocationService()
         observerJob?.cancel()
+        discoveryObserverJob?.cancel()
+        discoveryObserverJob = null
 
-        // Отправить итоги на сервер (fire-and-forget)
+        // ── Снимок итогов для оверлея (Figma 688:532) ───────────────────────
+        // Все поля форматируются единообразно с экраном WorkoutSummaryScreen,
+        // потому что переиспользуем тип WorkoutSummaryUiState — позволит в будущем
+        // вынести общие composable-ы оверлея и истории тренировок.
+        val summaryDistanceKm = (state.distanceMeters / 1000.0).toFloat()
+        val summaryDurationMs = state.elapsedMs
+        // Набор высоты считается полным проходом по trackPoints здесь, в момент
+        // завершения тренировки — отображается только на экране итогов.
+        val summaryElevationM = calculateElevationGain(state.trackPoints).toFloat()
+        val summaryStartTs    = if (trainingStartTimestamp > 0L)
+                                    trainingStartTimestamp
+                                else
+                                    System.currentTimeMillis()
+        val type = state.selectedType
+        val snapshot = WorkoutSummaryUiState(
+            origin           = SummaryOrigin.FINISH,
+            dateDisplay      = WorkoutSummaryFormatters.formatDate(summaryStartTs),
+            activityName     = type?.name.orEmpty(),
+            activityIconFile = type?.iconFile,
+            activityIconUrl  = type?.imageUrl,
+            activityIconKey  = type?.iconKey.orEmpty(),
+            paceDisplay      = WorkoutSummaryFormatters.formatPace(summaryDistanceKm, summaryDurationMs),
+            distanceDisplay  = WorkoutSummaryFormatters.formatDistance(summaryDistanceKm),
+            durationDisplay  = WorkoutSummaryFormatters.formatDuration(summaryDurationMs),
+            elevationDisplay = WorkoutSummaryFormatters.formatElevation(summaryElevationM),
+            trackPoints      = state.trackPoints,
+            cumulativeData   = buildCumulativeData(state.trackPoints, state.pauseGapIndices),
+            isLoading        = false,
+        )
+
+        // Отправить итоги на сервер (fire-and-forget с офлайн-fallback)
         if (trainingId != null) {
-            viewModelScope.launch {
-                // Ждём сигнала от сервиса о завершении финального flush+sync.
-                // Таймаут 5 сек — если сервис упал или сигнал не пришёл, идём дальше
-                // (худший случай: saveTraining закроет тренировку без последних точек,
-                // но пользователь не блокируется).
-                val syncSignaled = withTimeoutOrNull(5_000L) {
-                    LocationTrackingService.finishSyncFlow.first()
-                }
-                if (syncSignaled == null) {
-                    Log.w(TAG, "Timeout waiting for service sync signal; calling saveTraining anyway")
-                }
+            // Фиксируем timeEnd один раз — используется и в сетевом запросе,
+            // и в очереди, чтобы оба варианта содержали одинаковое время завершения.
+            val timeEnd = Instant.now()
+                .atZone(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+            // Шлём фактические значения даже при 0.0 — иначе Gson дропает null-поля,
+            // и в тело /save_training уходит только {"time_end":"..."} без
+            // total_distance_meters / total_kilocalories. Бэк на таком пустом
+            // теле падает с 500 (баг сервера, не обрабатывает Optional как
+            // отсутствующее поле). 0.0 валиден семантически: тренировка без
+            // движения → 0 м, 0 ккал. Подтверждено в логе 2026-05-18 19:41
+            // (training_id 7aa98edb-..., 1 GPS-точка, 17 сек → 500).
+            val distanceMeters = state.distanceMeters
+            val kilocalories   = state.kilocalories
 
-                workoutRepository.saveTraining(
-                    trainingId = trainingId,
-                    timeEnd = Instant.now()
-                        .atZone(ZoneOffset.UTC)
-                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-                    totalDistanceMeters = state.distanceMeters.takeIf { it > 0 },
-                    totalKilocalories   = state.kilocalories.takeIf { it > 0 },
-                )
+            if (!isTrainingRegisteredOnServer) {
+                // Тренировка не зарегистрирована на сервере (startTraining не успел или нет сети).
+                // Прямой вызов saveTraining(localUUID) вернёт 404 — сервер не знает этот ID.
+                // Сразу идём в WorkManager: сначала зарегистрирует тренировку, потом загрузит
+                // GPS-точки и закроет. Не ждём finishSyncFlow — сервис всё равно не смог
+                // синхронизировать точки в реальном времени (тренировки нет на сервере).
+                Log.w(TAG, "Training not registered on server, queuing full offline sync for $trainingId")
+                viewModelScope.launch {
+                    // NonCancellable: оба вызова не прерываются при уничтожении ViewModel
+                    // (поворот экрана, смахивание приложения). Без этого enqueueOfflineFinishWork
+                    // могла быть скипнута если ViewModel умерла между savePendingFinish и enqueue:
+                    // pending-запись в Room без WorkManager-цепочки → тренировка никогда не
+                    // синхронизируется пока пользователь не откроет приложение заново.
+                    withContext(NonCancellable) {
+                        workoutRepository.savePendingFinish(
+                            trainingId          = trainingId,
+                            timeEnd             = timeEnd,
+                            totalDistanceMeters = distanceMeters,
+                            totalKilocalories   = kilocalories,
+                            typeActivId         = _state.value.selectedType?.id,
+                            // Реальное время старта тренировки: фиксируется при нажатии «Начать».
+                            // Передаётся в POST /training/start чтобы бэкенд записал правильный
+                            // time_start — иначе сервер ставит время синхронизации (после сети),
+                            // которое всегда позже time_end → невалидные данные в истории.
+                            // Формат ISO_OFFSET_DATE_TIME (+00:00) совпадает с timeEnd —
+                            // Instant.toString() даёт суффикс Z, что вызывает ошибки парсинга
+                            // на FastAPI если сервер ожидает единообразный формат со смещением.
+                            timeStart           = Instant.ofEpochMilli(trainingStartTimestamp)
+                                .atZone(ZoneOffset.UTC)
+                                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                        )
+                        offlineFinishScheduler.enqueue(trainingId)
+                    }
+                }
+            } else {
+                viewModelScope.launch {
+                    // Ждём сигнала от сервиса о завершении финального flush+sync.
+                    // Таймаут 5 сек — если сервис упал или сигнал не пришёл, идём дальше
+                    // (худший случай: saveTraining закроет тренировку без последних точек,
+                    // но пользователь не блокируется).
+                    val syncSignaled = withTimeoutOrNull(5_000L) {
+                        LocationTrackingService.finishSyncFlow.first()
+                    }
+                    if (syncSignaled == null) {
+                        Log.w(TAG, "Timeout waiting for service sync signal; calling saveTraining anyway")
+                    }
+
+                    workoutRepository.saveTraining(
+                        trainingId          = trainingId,
+                        timeEnd             = timeEnd,
+                        totalDistanceMeters = distanceMeters,
+                        totalKilocalories   = kilocalories,
+                    ).onFailure { e ->
+                        when (e) {
+                            is NetworkUnavailableException -> {
+                                // Сеть пропала после регистрации — ставим в очередь без typeActivId:
+                                // тренировка уже есть на сервере, WorkManager только закроет её.
+                                // NonCancellable: запись в Room не прерывается если ViewModel
+                                // уничтожается прямо в этот момент (пользователь закрыл приложение).
+                                Log.w(TAG, "saveTraining failed (no network), queuing for later delivery")
+                                withContext(NonCancellable) {
+                                    workoutRepository.savePendingFinish(
+                                        trainingId          = trainingId,
+                                        timeEnd             = timeEnd,
+                                        totalDistanceMeters = distanceMeters,
+                                        totalKilocalories   = kilocalories,
+                                        typeActivId         = null,
+                                    )
+                                }
+                                offlineFinishScheduler.enqueue(trainingId)
+                            }
+                            else -> {
+                                // HTTP 4xx/5xx или прочие ошибки — не ставим в очередь,
+                                // retry бессмысленен или ситуация не связана с сетью.
+                                Log.e(TAG, "saveTraining failed with non-retryable error", e)
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        pausedElapsedMs = 0L
+        // Live-поля (timer/distance/trackPoints) НЕ сбрасываем здесь — карта продолжает
+        // показывать пройденный маршрут под оверлеем, а сам оверлей тянет данные из
+        // [snapshot]. Полный сброс выполняется в [onCloseSummaryOverlay].
         _state.update { it.copy(
             isTracking       = false,
             isWorkoutStarted = false,
-            gpsStatus        = GpsStatus.SEARCHING,
-            elapsedMs        = 0L,
-            timerDisplay     = "00:00:00",
-            distanceDisplay  = "0.00 км",
-            avgSpeedDisplay  = "00:00 мин/км",
-            caloriesDisplay  = "0 кКал",
-            distanceMeters   = 0.0,
-            kilocalories     = 0.0,
-            trackPoints      = emptyList(),
+            summaryOverlay   = snapshot,
+            isMapFullscreen  = false,
             mapTilesFailed   = false,
+            // Точки перенесены в snapshot.trackPoints — освобождаем live-список.
+            // Карта читает трек из summary?.trackPoints в WorkoutStartScreen.
+            trackPoints      = emptyList(),
         ) }
         currentTrainingId = null
+        isTrainingRegisteredOnServer = false
+    }
+
+    /**
+     * Закрытие оверлея итогов.
+     *
+     * Поведение зависит от [WorkoutSummaryUiState.origin]:
+     *  - [SummaryOrigin.FINISH]  — оверлей завершённой тренировки → возвращаемся в состояние
+     *    «можно начать новую тренировку»: сбрасываем live-поля и рестартуем discovery-GPS.
+     *  - [SummaryOrigin.HISTORY] — превью из истории → закрываем только оверлей, не трогая
+     *    live-состояние. Если параллельно идёт активная тренировка, её данные сохраняются.
+     *    Дополнительно отменяем [historyDetailJob], чтобы поздний ответ сети не возрождал
+     *    уже закрытый оверлей.
+     *
+     * Вызывается:
+     *  - тапом стрелки «назад» в оверлее
+     *  - системной кнопкой Back (через BackHandler в UI)
+     *  - переключением вкладки в нижнем баре (см. WorkoutHomeScreen)
+     */
+    fun onCloseSummaryOverlay() {
+        val overlay = _state.value.summaryOverlay ?: return
+
+        if (overlay.origin == SummaryOrigin.HISTORY) {
+            // История: только закрываем оверлей, отменяем pending-загрузку.
+            // Live-поля (trackPoints/elapsedMs/distance/...) НЕ трогаем —
+            // если идёт активная тренировка, её состояние должно остаться.
+            historyDetailJob?.cancel()
+            historyDetailJob = null
+            _state.update { it.copy(summaryOverlay = null, isMapFullscreen = false) }
+            return
+        }
+
+        // FINISH: полный сброс live-полей и рестарт discovery-GPS
+        pausedElapsedMs = 0L
+        trainingStartTimestamp = 0L
+        _state.update { it.copy(
+            summaryOverlay  = null,
+            isMapFullscreen = false,
+            // Сохраняем ACQUIRED если GPS был активен — физически сигнал не пропал,
+            // только завершилась тренировка. SEARCHING ставим если фикса не было.
+            gpsStatus       = if (it.gpsStatus == GpsStatus.ACQUIRED)
+                                  GpsStatus.ACQUIRED
+                              else
+                                  GpsStatus.SEARCHING,
+            elapsedMs         = 0L,
+            timerDisplay      = "00:00:00",
+            distanceDisplay   = "0.00 км",
+            avgSpeedDisplay   = "00:00 мин/км",
+            caloriesDisplay   = "0 кКал",
+            distanceMeters    = 0.0,
+            kilocalories      = 0.0,
+            trackPoints       = emptyList(),
+            pauseGapIndices   = emptyList(),
+            mapTilesFailed    = false,
+        ) }
         offlineMapManager.reset()
-        // Сразу перезапускаем discovery-GPS: иконка остаётся живой между тренировками
+        // Перезапускаем discovery-GPS: иконка остаётся живой между тренировками
         startDiscoveryGps()
+    }
+
+    /**
+     * Переключение полноэкранного режима карты внутри оверлея итогов (Figma 723:460).
+     * Тап по карте раскрывает её на весь экран; стрелка «назад» сворачивает обратно.
+     */
+    fun onToggleFullscreenMap() {
+        _state.update { it.copy(isMapFullscreen = !it.isMapFullscreen) }
+    }
+
+    /**
+     * Удаление тренировки из истории (вызов из SummaryOverlay по тапу на иконку корзины).
+     *
+     * Безопасный no-op если:
+     *  - оверлей закрыт (overlay == null);
+     *  - оверлей не HISTORY (FINISH-оверлей не должен предлагать удаление);
+     *  - trainingId не известен (странный кейс, но fallback).
+     *
+     * После успеха закрываем оверлей через [onCloseSummaryOverlay] (не трогаем live-поля,
+     * это HISTORY-ветка). TrainingHistoryViewModel сам перезагрузит список через
+     * historyChangedFlow → loadHistory.
+     */
+    fun onDeleteHistoryTraining() {
+        val overlay = _state.value.summaryOverlay ?: return
+        if (overlay.origin != SummaryOrigin.HISTORY) return
+        val trainingId = overlay.trainingId ?: return
+        viewModelScope.launch {
+            workoutRepository.deleteCompletedTraining(trainingId)
+                .onSuccess { onCloseSummaryOverlay() }
+                .onFailure { e -> Log.e(TAG, "deleteCompletedTraining failed for $trainingId", e) }
+        }
+    }
+
+    /**
+     * Показать SummaryOverlay для тренировки из истории.
+     *
+     * Сначала отображает overlay в состоянии загрузки ([WorkoutSummaryUiState.isLoading] = true),
+     * затем асинхронно загружает GPS-трек через GET /training/{id}/get_training.
+     * Если трек недоступен — overlay показывается со статистикой, но без карты.
+     *
+     * Используется из [com.example.smarttracker.presentation.workout.WorkoutHomeScreen]
+     * при клике на карточку тренировки в Day view истории.
+     */
+    fun showHistorySummary(item: TrainingHistoryItem, activityName: String) {
+        // Если уже идёт загрузка предыдущего превью — отменяем, чтобы её поздний
+        // ответ не перетёр новый снимок.
+        historyDetailJob?.cancel()
+        _state.update { it.copy(summaryOverlay = WorkoutSummaryUiState(
+            origin     = SummaryOrigin.HISTORY,
+            trainingId = item.trainingId,
+            isLoading  = true,
+        )) }
+        historyDetailJob = viewModelScope.launch {
+            val points    = workoutRepository.getTrainingDetail(item.trainingId).getOrDefault(emptyList())
+            val distanceKm = ((item.distanceM ?: 0.0) / 1000.0).toFloat()
+            val durationMs = computeHistoryDurationMs(item.timeStart, item.timeEnd)
+            val workoutType = _state.value.workoutTypes.find { it.id == item.typeActivId }
+            val dateMs     = item.date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            // Приоритет: серверное elevation_gain из списка истории (item.elevationGain).
+            // Fallback на клиентский расчёт по точкам — на случай старого ответа без поля
+            // или null от сервера.
+            val elevationM = (item.elevationGain ?: calculateElevationGain(points)).toFloat()
+            val cumData    = buildCumulativeData(points, emptyList())
+            val snapshot = WorkoutSummaryUiState(
+                origin           = SummaryOrigin.HISTORY,
+                trainingId       = item.trainingId,
+                dateDisplay      = WorkoutSummaryFormatters.formatDate(dateMs),
+                activityName     = activityName,
+                activityIconFile = workoutType?.iconFile,
+                activityIconUrl  = workoutType?.imageUrl,
+                activityIconKey  = item.typeActivId.toString(),
+                paceDisplay      = WorkoutSummaryFormatters.formatPace(distanceKm, durationMs),
+                distanceDisplay  = WorkoutSummaryFormatters.formatDistance(distanceKm),
+                durationDisplay  = WorkoutSummaryFormatters.formatDuration(durationMs),
+                elevationDisplay = WorkoutSummaryFormatters.formatElevation(elevationM),
+                trackPoints      = points,
+                cumulativeData   = cumData,
+            )
+            // Защита от гонки: если оверлей закрыли или уже переключили на другую
+            // тренировку, пока шла загрузка, не перетираем актуальный snapshot.
+            _state.update {
+                val currentOverlay = it.summaryOverlay
+                if (currentOverlay == null || currentOverlay.trainingId != item.trainingId) it
+                else it.copy(summaryOverlay = snapshot)
+            }
+        }
+    }
+
+    /** Парсит ISO-строки времени из истории API (формат "2026-05-16T08:44:00.613000Z"). */
+    private fun computeHistoryDurationMs(start: String?, end: String?): Long {
+        if (start == null || end == null) return 0L
+        return try {
+            val s = java.time.OffsetDateTime.parse(start.trim()).toLocalDateTime()
+            val e = java.time.OffsetDateTime.parse(end.trim()).toLocalDateTime()
+            java.time.Duration.between(s, e).toMillis()
+        } catch (_: Exception) { 0L }
+    }
+
+    /**
+     * Считает суммарный положительный набор высоты по GPS-точкам.
+     *
+     * Алгоритм прост: суммируем только положительные дельты altitude между соседними
+     * точками. Точки с null-altitude пропускаем (не ломают цепочку, но и не дают
+     * прироста). Вызывается один раз в [onFinishClick] — отображается только на
+     * экране итогов, во время тренировки набор высоты не обновляется.
+     *
+     * TODO: фильтр шума GPS-альтиметра (±5–10 м) — см. CLAUDE.md пункт 19.
+     */
+    private fun calculateElevationGain(points: List<LocationPoint>): Double {
+        if (points.size < 2) return 0.0
+        var gain = 0.0
+        var prevAlt: Double? = null
+        for (p in points) {
+            val alt = p.altitude ?: continue
+            prevAlt?.let { prev -> if (alt - prev > 0) gain += alt - prev }
+            prevAlt = alt
+        }
+        return gain
+    }
+
+    /**
+     * Предвычисляет накопленные значения трека (дистанция, набор высоты, время) для
+     * каждой GPS-точки. Используется для O(1) scrub-lookups при перемотке трека.
+     * Вычисляется один раз в [onFinishClick] и хранится в снимке [WorkoutSummaryUiState].
+     *
+     * Симметрия с live-расчётами (критично для совпадения итогов в конце scrubbing):
+     * - **Дистанция:** gap-пары (индексы из [pauseGapIndices]) пропускаются — тот же
+     *   набор gap-индексов, что использует live-расчёт в `observeTrackingData`.
+     * - **Elapsed:** время каждой паузы (timestampUtc[gap] − timestampUtc[gap−1]) вычитается
+     *   нарастающим итогом — аналогично `startTimeMs = now − pausedElapsedMs` в таймере.
+     * - **Высота:** null-точки пропускаются через `prevAlt: Double?` — идентично
+     *   `calculateElevationGain` (избегает ложных скачков +300 м при null→0.0).
+     *
+     * @param pauseGapIndices индексы первых точек после каждого resume (из [UiState.pauseGapIndices])
+     */
+    private fun buildCumulativeData(
+        points: List<LocationPoint>,
+        pauseGapIndices: List<Int>,
+    ): com.example.smarttracker.presentation.workout.summary.CumulativeTrackData {
+        if (points.size < 2) return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData()
+        val gapSet = pauseGapIndices.toHashSet()
+        val n = points.size
+        val distances = ArrayList<Float>(n)
+        val elevations = ArrayList<Float>(n)
+        val elapsed    = ArrayList<Long>(n)
+        val speeds     = ArrayList<Float>(n)
+        var cumDistM     = 0.0
+        var cumElevM     = 0f
+        var totalPausedMs = 0L
+        val t0 = points.first().timestampUtc
+        // prevAlt: последняя известная высота — зеркалит логику calculateElevationGain.
+        // Если передавать (altitude ?: 0.0), null-точка трактуется как высота 0 → ложный
+        // скачок +300 м при переходе от 300 м к null и затем снова к 305 м (60× расхождение).
+        var prevAlt: Double? = points.first().altitude
+        distances.add(0f); elevations.add(0f); elapsed.add(0L); speeds.add(0f)
+        for (i in 1 until n) {
+            val isGap = i in gapSet
+            // Δdistance этого шага — нужен и для накопленной дистанции, и для скорости.
+            var stepDistM = 0.0
+            if (isGap) {
+                // Gap-пара: пользователь стоял на паузе. Haversine не считаем — телепорт
+                // не отражает реального движения. Время паузы вычитаем из elapsed.
+                totalPausedMs += points[i].timestampUtc - points[i - 1].timestampUtc
+            } else {
+                stepDistM = calculateTrainingStatsUseCase.distanceBetween(
+                    points[i - 1], points[i]
+                )
+                cumDistM += stepDistM
+                val altCur = points[i].altitude
+                if (altCur != null && prevAlt != null) {
+                    val dAlt = (altCur - prevAlt).toFloat()
+                    if (dAlt > 0f) cumElevM += dAlt
+                }
+            }
+            val altCur = points[i].altitude
+            if (altCur != null) prevAlt = altCur  // обновляем prevAlt даже на gap-точках
+            distances.add((cumDistM / 1000.0).toFloat())
+            elevations.add(cumElevM)
+            elapsed.add(points[i].timestampUtc - t0 - totalPausedMs)
+            // Мгновенная скорость м/с. Для FINISH дублирует sensor-speed, но даёт single
+            // source of truth (UI читает speeds[i] всегда из cumulativeData). Для HISTORY
+            // sensor-speed = null, расчёт = только этот способ.
+            // На gap-парах stepDistM=0 → speed=0, что корректно (пользователь стоял).
+            // Защита от деления на ноль: dtMs <= 0 → 0 (для дубль-точек с одинаковым timestamp).
+            val dtMs = points[i].timestampUtc - points[i - 1].timestampUtc
+            val speedMs = if (dtMs > 0L) (stepDistM / (dtMs / 1000.0)).toFloat() else 0f
+            speeds.add(speedMs)
+        }
+        return com.example.smarttracker.presentation.workout.summary.CumulativeTrackData(
+            distancesKm = distances,
+            elevationsM = elevations,
+            elapsedMs   = elapsed,
+            speedsMs    = speeds,
+        )
     }
 
     /** Карта сообщила, что тайлы недоступны (нет сети + нет кэша). Показываем fallback. */
@@ -473,30 +1093,33 @@ class WorkoutStartViewModel @Inject constructor(
      * Тяжёлый расчёт выполняется на Dispatchers.Default, не блокируя UI.
      * collectLatest отменяет предыдущий блок при поступлении нового события.
      *
-     * GPS-таймаут: 30 сек без новых точек → UNAVAILABLE; перезапускается после каждой точки,
-     * поэтому потеря сигнала после ACQUIRED тоже корректно обнаруживается.
+     * GPS-таймаут: 30 сек без новых точек → gpsStatus = UNAVAILABLE; тренировка при этом
+     * продолжается (таймер и трекинг не останавливаются). Таймаут перезапускается после
+     * каждой точки, поэтому потеря сигнала после ACQUIRED тоже корректно обнаруживается.
      */
     private fun observeTrackingData(trainingId: String) {
         observerJob?.cancel()
         observerJob = viewModelScope.launch {
             // Инкрементальный счётчик живёт в скоупе coroutine — синхронизация не нужна
             var accumulatedDistanceM = 0.0
+            // Локальный аккумулятор калорий — симметричен accumulatedDistanceM.
+            // НЕ читаем _state.value.kilocalories: при перезапуске observer'а после re-key
+            // (localUUID → serverUUID) state уже содержит накопленное значение, и
+            // currentKilocalories + deltaKcal дало бы K + K = 2K.
+            var accumulatedKilocalories = 0.0
             var processedCount = 0
 
             // Дочерний Job таймаута: перезапускается после каждой новой точки,
             // чтобы корректно обнаруживать потерю сигнала и после ACQUIRED.
+            // Тренировка при потере сигнала НЕ останавливается — только обновляется
+            // индикатор GPS. Таймер и трекинг продолжаются: когда сигнал вернётся,
+            // observerJob увидит новые точки и gpsStatus вернётся в ACQUIRED.
             var timeoutJob: Job? = null
             fun restartTimeout() {
                 timeoutJob?.cancel()
                 timeoutJob = launch {
                     delay(LocationConfig.GPS_FIX_TIMEOUT_MS)
-                    // Сигнал недоступности GPS — переводим трекинг в тот же режим,
-                    // что и ручная пауза, чтобы корректно остановить таймер,
-                    // сохранить elapsed-время паузы и синхронно обновить UI.
-                    onPauseClick()
-                    _state.update { it.copy(
-                        gpsStatus = GpsStatus.UNAVAILABLE,
-                    ) }
+                    _state.update { it.copy(gpsStatus = GpsStatus.UNAVAILABLE) }
                 }
             }
             restartTimeout()
@@ -511,33 +1134,31 @@ class WorkoutStartViewModel @Inject constructor(
                         restartTimeout()
                     }
 
-                    val currentKilocalories = _state.value.kilocalories
+                    // gap-индексы из сервиса: пары (i-1, i) с i ∈ gapSet — это «телепорт»
+                    // через паузу, реального движения там нет. Читаем до withContext.
+                    val gapSet = _state.value.pauseGapIndices.toHashSet()
 
                     // Инкрементальный расчёт на фоновом потоке, чтобы не блокировать UI.
                     // Внутри withContext нет точек приостановки, поэтому collectLatest
-                    // не может прервать блок посередине — accumulatedDistanceM и processedCount
-                    // всегда обновляются атомарно (вместе или не обновляются вовсе).
+                    // не может прервать блок посередине — все аккумуляторы обновляются атомарно.
                     val (newDistanceM, avgSpeedMps, kilocalories) = withContext(Dispatchers.Default) {
-                        // effectiveCount: при первом вызове после возобновления с паузы
-                        // пропускаем точки от якоря до сейчас, чтобы не засчитать движение
-                        // совершённое пока запись была выключена (пауза).
-                        val effectiveCount = maxOf(processedCount, resumeAnchorPointCount)
-                        val delta = calculateTrainingStatsUseCase.calculateDeltaDistance(
-                            points, effectiveCount
-                        )
-                        accumulatedDistanceM += delta
-
-                        // Калории уже инкрементальны на уровне точки, поэтому считаем
-                        // только вклад новых точек, начиная с effectiveCount.
-                        var deltaKcal = 0.0
-                        for (index in effectiveCount until points.size) {
-                            deltaKcal += points[index].calories ?: 0.0
+                        // Считаем дистанцию только новых пар [processedCount, points.size).
+                        // Gap-пары пропускаем — симметрично с buildCumulativeData (summary).
+                        for (i in maxOf(1, processedCount) until points.size) {
+                            if (i in gapSet) continue
+                            accumulatedDistanceM += calculateTrainingStatsUseCase
+                                .distanceBetween(points[i - 1], points[i])
                         }
-                        val kcal = currentKilocalories + deltaKcal
+
+                        // Калории инкрементальны на уровне точки. Gap-точка имеет
+                        // calories=null (сервис сбрасывает prevCaloriePoint на resume) →
+                        // её вклад 0, отдельно пропускать не нужно.
+                        for (index in processedCount until points.size) {
+                            accumulatedKilocalories += points[index].calories ?: 0.0
+                        }
+                        val kcal = accumulatedKilocalories
 
                         processedCount = points.size
-                        // Якорь одноразовый — сбрасываем после первого применения
-                        if (resumeAnchorPointCount > 0) resumeAnchorPointCount = 0
 
                         // Длительность по монотонным часам (elapsedNanos) — не зависит от NTP/смены времени.
                         // Известное ограничение: elapsedNanos продолжает тикать во время паузы,
@@ -605,8 +1226,18 @@ class WorkoutStartViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // Останавливаем сервис при уничтожении ViewModel (навигация прочь с экрана)
+        // Останавливаем сервис при уничтожении ViewModel (навигация прочь с экрана).
         stopLocationService()
+        // Если пользователь ушёл с экрана не начав тренировку — discovery UUID ещё жив.
+        // Сервис успеет вызвать onDestroy и сам удалит точки (wasDiscovery = true),
+        // но на случай Android service-reuse добавляем явное удаление здесь тоже.
+        val discId = discoveryTrainingId
+        if (discId != null) {
+            viewModelScope.launch {
+                locationRepository.deletePointsForTraining(discId)
+            }
+            discoveryTrainingId = null
+        }
     }
 
     private fun loadFavoriteIds(): Set<String> {
@@ -663,6 +1294,47 @@ class WorkoutStartViewModel @Inject constructor(
     }
 
     /**
+     * Переводит работающий discovery-сервис в режим тренировки без остановки.
+     * Отправляет [LocationTrackingService.EXTRA_TRANSITION_TO_WORKOUT] Intent через
+     * startForegroundService() — onStartCommand() вызывается на живом экземпляре,
+     * startForeground() срабатывает мгновенно без задержки destroy/create.
+     *
+     * Если сервис по каким-то причинам не запущен — startForegroundService() запустит
+     * новый экземпляр, который корректно обработает EXTRA_TRANSITION_TO_WORKOUT.
+     */
+    private fun transitionToWorkout(trainingId: String) {
+        val selectedType = _state.value.selectedType ?: return
+        val intervalMs = when (selectedType.iconKey) {
+            "3"  -> LocationConfig.INTERVAL_MS_CYCLING
+            else -> LocationConfig.INTERVAL_MS_RUNNING
+        }
+        val accuracyThreshold = when (selectedType.iconKey) {
+            "3"  -> LocationConfig.MAX_ACCURACY_CYCLING
+            else -> LocationConfig.MAX_ACCURACY_RUNNING
+        }
+        val intent = Intent(context, LocationTrackingService::class.java).apply {
+            putExtra(LocationTrackingService.EXTRA_TRANSITION_TO_WORKOUT, true)
+            putExtra(LocationTrackingService.EXTRA_TRAINING_ID, trainingId)
+            putExtra(LocationTrackingService.EXTRA_INTERVAL_MS, intervalMs)
+            putExtra(LocationTrackingService.EXTRA_ACCURACY_THRESHOLD, accuracyThreshold)
+            putExtra(LocationTrackingService.EXTRA_TYPE_ACTIV_ID, selectedType.id)
+            userProfile?.let { profile ->
+                profile.weight?.let { putExtra(LocationTrackingService.EXTRA_WEIGHT_KG, it) }
+                profile.height?.let { putExtra(LocationTrackingService.EXTRA_HEIGHT_CM, it) }
+                val today = LocalDate.now()
+                val rawAgeYears = Period.between(profile.birthDate, today).years
+                if (profile.birthDate.isAfter(today)) {
+                    Log.w(TAG, "Ignoring future birthDate when calculating age: ${profile.birthDate}")
+                }
+                val ageYears = rawAgeYears.coerceAtLeast(0)
+                putExtra(LocationTrackingService.EXTRA_AGE_YEARS, ageYears)
+                putExtra(LocationTrackingService.EXTRA_IS_MALE, profile.gender == Gender.MALE)
+            }
+        }
+        context.startForegroundService(intent)
+    }
+
+    /**
      * Запускает GPS-сервис для discovery-фазы (без профиля и MET-данных).
      * Discovery работает при открытии экрана, до нажатия «Начать тренировку».
      *
@@ -688,7 +1360,7 @@ class WorkoutStartViewModel @Inject constructor(
             // Discovery: точки не пишутся в Room, не синхронизируются с сервером
             putExtra(LocationTrackingService.EXTRA_IS_DISCOVERY, true)
         }
-        context.startForegroundService(intent)
+        context.startService(intent)
     }
 
     private fun stopLocationService() {
@@ -699,17 +1371,8 @@ class WorkoutStartViewModel @Inject constructor(
     companion object {
         private const val TAG = "WorkoutStartViewModel"
 
-        /**
-         * Форматирует миллисекунды в строку "HH:MM:SS" с ведущими нулями.
-         * Используется для таймера тренировки.
-         */
-        fun formatDuration(elapsedMs: Long): String {
-            val totalSec = elapsedMs / 1000L
-            val hours   = totalSec / 3600L
-            val minutes = (totalSec % 3600L) / 60L
-            val seconds = totalSec % 60L
-            return "%02d:%02d:%02d".format(hours, minutes, seconds)
-        }
+        /** Форматирует миллисекунды в "HH:MM:SS" для таймера тренировки. */
+        fun formatDuration(elapsedMs: Long): String = formatHhMmSs(elapsedMs)
 
         /**
          * Форматирует скорость (м/с) в темп "M:SS мин/км".

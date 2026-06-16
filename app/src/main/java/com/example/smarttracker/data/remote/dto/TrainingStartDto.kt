@@ -7,10 +7,16 @@ import com.google.gson.annotations.SerializedName
  * DTO запроса POST /training/start.
  *
  * @param typeActivId идентификатор типа активности (из GET /training/types_activity)
+ * @param timeStart фактическое время начала тренировки (ISO 8601 UTC). Передаётся только
+ *   для офлайн-тренировок, у которых есть реальный timestamp старта. Если null — бэкенд
+ *   использует время получения запроса (поведение по умолчанию).
+ *   Поле опциональное: старые версии клиента его не передают — бэкенд ведёт себя как раньше.
  */
 data class TrainingStartRequestDto(
     @SerializedName("type_activ_id")
     val typeActivId: Int,
+    @SerializedName("time_start")
+    val timeStart: String? = null,
 )
 
 /**

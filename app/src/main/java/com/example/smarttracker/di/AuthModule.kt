@@ -7,8 +7,16 @@ import com.example.smarttracker.data.local.RoleConfigStorage
 import com.example.smarttracker.data.local.RoleConfigStorageImpl
 import com.example.smarttracker.data.local.TokenStorage
 import com.example.smarttracker.data.local.TokenStorageImpl
+import com.example.smarttracker.data.local.UserProfileCache
+import com.example.smarttracker.data.local.UserProfileCacheImpl
+import com.example.smarttracker.data.local.db.ActivityTypeDao
+import com.example.smarttracker.data.local.db.ActivityTypeEntity
 import com.example.smarttracker.data.local.db.GpsPointDao
+import com.example.smarttracker.data.local.db.METActivityDao
+import com.example.smarttracker.data.local.db.PendingFinishDao
 import com.example.smarttracker.data.local.db.SmartTrackerDatabase
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import okhttp3.Interceptor
 import com.example.smarttracker.data.remote.AuthApiService
 import com.example.smarttracker.data.remote.TokenRefreshAuthenticator
@@ -46,6 +54,10 @@ abstract class AuthModule {
     @Binds
     @Singleton
     abstract fun bindRoleConfigStorage(impl: RoleConfigStorageImpl): RoleConfigStorage
+
+    @Binds
+    @Singleton
+    abstract fun bindUserProfileCache(impl: UserProfileCacheImpl): UserProfileCache
 
     @Binds
     @Singleton
@@ -145,13 +157,46 @@ abstract class AuthModule {
                 SmartTrackerDatabase::class.java,
                 "smart_tracker.db"
             )
-            // version 2 добавила bearing + externalId. Деструктивная миграция допустима
-            // пока данные тренировок не критичны (production-миграция — в Этапе 5).
+            .addMigrations(
+                SmartTrackerDatabase.MIGRATION_5_6,
+                SmartTrackerDatabase.MIGRATION_6_7,
+                SmartTrackerDatabase.MIGRATION_7_8,
+            )
+            // Деструктивная миграция допустима пока данные тренировок не критичны
+            // (production-миграция — в Этапе 5).
             .fallbackToDestructiveMigration()
+            // Дефолтные типы вставляются один раз при первом создании БД.
+            // При последующих запусках таблица заполняется из сети через upsertAll.
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onCreate(db: SupportSQLiteDatabase) {
+                    listOf(
+                        ActivityTypeEntity(id = 1, name = "Бег",       imagePath = null),
+                        ActivityTypeEntity(id = 3, name = "Велосипед", imagePath = null),
+                        ActivityTypeEntity(id = 5, name = "Ходьба",    imagePath = null),
+                    ).forEach { e ->
+                        db.execSQL(
+                            "INSERT OR IGNORE INTO activity_types(id, name, imagePath) VALUES(?,?,?)",
+                            arrayOf(e.id, e.name, e.imagePath)
+                        )
+                    }
+                }
+            })
             .build()
 
         @Provides
         @Singleton
         fun provideGpsPointDao(db: SmartTrackerDatabase): GpsPointDao = db.gpsPointDao()
+
+        @Provides
+        @Singleton
+        fun provideActivityTypeDao(db: SmartTrackerDatabase): ActivityTypeDao = db.activityTypeDao()
+
+        @Provides
+        @Singleton
+        fun providePendingFinishDao(db: SmartTrackerDatabase): PendingFinishDao = db.pendingFinishDao()
+
+        @Provides
+        @Singleton
+        fun provideMETActivityDao(db: SmartTrackerDatabase): METActivityDao = db.metActivityDao()
     }
 }
