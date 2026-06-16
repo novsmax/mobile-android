@@ -8,13 +8,32 @@
 
 ## Скриншоты
 
-| Запуск тренировки | Сводка | История | Вход |
-|:---:|:---:|:---:|:---:|
-| ![Запуск тренировки](screenshots/screen_workout_start.png) | ![Сводка тренировки](screenshots/screen_workout_finish.png) | ![История тренировок](screenshots/screen_calendar_month.png) | ![Вход](screenshots/screen_login.png) |
-
-| Меню | Профиль | Редактирование профиля | Календарь (день) |
-|:---:|:---:|:---:|:---:|
-| ![Меню](screenshots/screen_menu.png) | ![Профиль](screenshots/screen_profile.png) | ![Редактирование профиля](screenshots/screen_profile_edit.png) | ![Календарь по дням](screenshots/screen_calendar_day.png) |
+<table>
+  <tr>
+    <td align="center"><b>Запуск тренировки</b></td>
+    <td align="center"><b>Сводка</b></td>
+    <td align="center"><b>История</b></td>
+    <td align="center"><b>Вход</b></td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/screen_workout_start.png" width="200" alt="Запуск тренировки"></td>
+    <td><img src="screenshots/screen_workout_finish.png" width="200" alt="Сводка тренировки"></td>
+    <td><img src="screenshots/screen_calendar_month.png" width="200" alt="История тренировок"></td>
+    <td><img src="screenshots/screen_login.png" width="200" alt="Вход"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Меню</b></td>
+    <td align="center"><b>Профиль</b></td>
+    <td align="center"><b>Редактирование профиля</b></td>
+    <td align="center"><b>Календарь (день)</b></td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/screen_menu.png" width="200" alt="Меню"></td>
+    <td><img src="screenshots/screen_profile.png" width="200" alt="Профиль"></td>
+    <td><img src="screenshots/screen_profile_edit.png" width="200" alt="Редактирование профиля"></td>
+    <td><img src="screenshots/screen_calendar_day.png" width="200" alt="Календарь по дням"></td>
+  </tr>
+</table>
 
 ---
 
