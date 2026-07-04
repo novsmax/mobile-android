@@ -190,12 +190,8 @@ class WorkoutStartViewModel @Inject constructor(
      */
     private var trainingStartTimestamp: Long = 0L
 
-    /**
-     * Сигнал принудительного выхода из сессии (оба токена истекли).
-     * WorkoutHomeScreen наблюдает этот flow и при true вызывает onLogout().
-     * Делегирует в authRepository.sessionExpiredFlow → tokenStorage.sessionExpiredFlow.
-     */
-    val sessionExpired: StateFlow<Boolean> = authRepository.sessionExpiredFlow
+    // Сигнал истечения сессии обрабатывается глобально в AppNavGraph
+    // (AppViewModel.sessionExpired) — локальное делегирование удалено.
 
     // UUID тренировки: генерируется при первом старте, сохраняется при паузе/возобновлении,
     // сбрасывается в null при завершении (onFinishClick).
