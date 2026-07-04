@@ -21,10 +21,12 @@ import okhttp3.Interceptor
 import com.example.smarttracker.data.remote.AuthApiService
 import com.example.smarttracker.data.remote.TokenRefreshAuthenticator
 import com.example.smarttracker.data.remote.TrainingApiService
+import com.example.smarttracker.data.repository.AllowedEmailDomainsRepositoryImpl
 import com.example.smarttracker.data.repository.AuthRepositoryImpl
 import com.example.smarttracker.data.repository.WorkoutRepositoryImpl
 import com.example.smarttracker.data.repository.PasswordRecoveryRepositoryImpl
 import com.example.smarttracker.data.repository.location.LocationRepositoryImpl
+import com.example.smarttracker.domain.repository.AllowedEmailDomainsRepository
 import com.example.smarttracker.domain.repository.AuthRepository
 import com.example.smarttracker.domain.repository.LocationRepository
 import com.example.smarttracker.domain.repository.PasswordRecoveryRepository
@@ -82,6 +84,15 @@ abstract class AuthModule {
     @Singleton
     // Реализация через GpsPointDao (Room). Используется в Этапах 2–5.
     abstract fun bindLocationRepository(impl: LocationRepositoryImpl): LocationRepository
+
+    @Binds
+    @Singleton
+    // 149-ФЗ — список российских почтовых доменов для регистрации.
+    // Сейчас захардкожен; после появления GET /auth/allowed-email-domains
+    // заменить реализацию на сетевую с кэшем (см. TODO в impl).
+    abstract fun bindAllowedEmailDomainsRepository(
+        impl: AllowedEmailDomainsRepositoryImpl
+    ): AllowedEmailDomainsRepository
 
     companion object {
 
