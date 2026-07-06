@@ -28,9 +28,12 @@ API Docs: https://runtastic.gottland.ru/docs
   RegisterViewModelTest, ProfileViewModelTest, WorkoutStartViewModelTest
   (recovery-контракт, нюанс 28).
 - **Перед релизом:** ✅ минификация + proguard-правила, ✅ подписание (wiring;
-  keystore генерирует владелец по `keystore.properties.example`), осталось:
-  убрать debug_code на бэке (BR-1), ревизия публичности CONTEXT.md
-  (содержит инфраструктурные детали сервера), smoke-test release-APK
+  keystore генерирует владелец по `keystore.properties.example`),
+  ✅ 152-ФЗ-пакет на клиенте (политика по структуре 152-ФЗ в LegalScreens,
+  гео-согласие перед GPS-разрешением, удаление аккаунта проверено).
+  Осталось: реквизиты оператора ПДн + юр-проверка текстов (плейсхолдеры
+  в LegalScreens.kt), хостинг политики (BR-15), убрать debug_code на бэке
+  (BR-1), ревизия публичности CONTEXT.md, smoke-test release-APK
   на устройстве (логин → тренировка → финиш → история).
 
 ---
