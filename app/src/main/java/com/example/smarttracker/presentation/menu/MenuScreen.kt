@@ -49,6 +49,7 @@ private val ColorAchievementIcon3 = Color(0xFFCD7F32)
 fun MenuScreen(
     padding: PaddingValues,
     onNavigateToProfile: () -> Unit,
+    onNavigateToSettings: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -59,7 +60,10 @@ fun MenuScreen(
     ) {
         MenuHeader()
         Spacer(modifier = Modifier.height(8.dp))
-        MenuGrid(onNavigateToProfile = onNavigateToProfile)
+        MenuGrid(
+            onNavigateToProfile = onNavigateToProfile,
+            onNavigateToSettings = onNavigateToSettings,
+        )
         Spacer(modifier = Modifier.height(24.dp))
         AchievementsSection()
         Spacer(modifier = Modifier.height(24.dp))
@@ -102,7 +106,10 @@ private data class GridItemData(
 )
 
 @Composable
-private fun MenuGrid(onNavigateToProfile: () -> Unit) {
+private fun MenuGrid(
+    onNavigateToProfile: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+) {
     val noOp: () -> Unit = {}
 
     val items = listOf(
@@ -110,7 +117,7 @@ private fun MenuGrid(onNavigateToProfile: () -> Unit) {
         GridItemData({ painterResource(R.drawable.ic_achivements) },      "Достижения",  noOp),
         GridItemData({ painterResource(R.drawable.ic_samples) },          "Шаблоны",     noOp),
         GridItemData({ painterResource(R.drawable.ic_profile) },          "Профиль",     onNavigateToProfile),
-        GridItemData({ painterResource(R.drawable.ic_settings) },  "Настройки",   noOp),
+        GridItemData({ painterResource(R.drawable.ic_settings) },  "Настройки",   onNavigateToSettings),
     )
 
     Column(modifier = Modifier.padding(horizontal = 4.dp)) {

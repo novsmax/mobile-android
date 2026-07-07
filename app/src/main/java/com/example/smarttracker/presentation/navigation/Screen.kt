@@ -16,4 +16,5 @@ sealed class Screen(val route: String) {
     data object MyClub   : Screen("club")          // For CLUB_OWNER role (role_id = 3)
     data object Profile     : Screen("profile")      // Available for all roles
     data object ProfileEdit : Screen("profile_edit") // Available for all roles
+    data object Settings    : Screen("settings")     // Available for all roles
 }

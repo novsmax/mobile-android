@@ -172,6 +172,16 @@ fun WorkoutStartScreen(
     // Локальное состояние шторки выбора активности — чисто UI, не нужно в ViewModel
     var showTypeSelector by remember { mutableStateOf(false) }
 
+    // ── «Не гасить экран» (Меню → Настройки) ─────────────────────────────────
+    // View.keepScreenOn вместо флага окна Activity: снимается автоматически
+    // когда composable покидает композицию (уход с вкладки/экрана), не требует
+    // доступа к Window. Активен только во время записи тренировки.
+    val rootView = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(state.isTracking, state.keepScreenOn) {
+        rootView.keepScreenOn = state.isTracking && state.keepScreenOn
+        onDispose { rootView.keepScreenOn = false }
+    }
+
     // Счётчик recenter-тапов на GPS-бейдж. Передаётся в MapViewComposable как
     // recenterTrigger — каждое изменение значения (≠ 0) триггерит анимированное
     // центрирование карты на текущей позиции. Тип Int (не Boolean): два тапа

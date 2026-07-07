@@ -28,6 +28,8 @@ import com.example.smarttracker.presentation.menu.profile.ProfileEditScreen
 import com.example.smarttracker.presentation.menu.profile.ProfileEditViewModel
 import com.example.smarttracker.presentation.menu.profile.ProfileScreen
 import com.example.smarttracker.presentation.menu.profile.ProfileViewModel
+import com.example.smarttracker.presentation.menu.settings.SettingsScreen
+import com.example.smarttracker.presentation.menu.settings.SettingsViewModel
 import com.example.smarttracker.presentation.workout.WorkoutHomeScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -219,6 +221,23 @@ fun AppNavGraph(
                 onNavigateToProfile = {
                     navController.navigate(Screen.Profile.route)
                 },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
+                },
+            )
+        }
+
+        composable(Screen.Settings.route) {
+            val viewModel: SettingsViewModel = hiltViewModel()
+            val settings by viewModel.state.collectAsStateWithLifecycle()
+
+            SettingsScreen(
+                settings = settings,
+                onBack = { navController.popBackStack() },
+                onAutopauseChanged = viewModel::onAutopauseChanged,
+                onVoiceCuesChanged = viewModel::onVoiceCuesChanged,
+                onVoiceCueIntervalChanged = viewModel::onVoiceCueIntervalChanged,
+                onKeepScreenOnChanged = viewModel::onKeepScreenOnChanged,
             )
         }
 

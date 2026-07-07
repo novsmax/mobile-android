@@ -5,6 +5,8 @@ import androidx.room.Room
 import com.example.smarttracker.BuildConfig
 import com.example.smarttracker.data.local.RoleConfigStorage
 import com.example.smarttracker.data.local.RoleConfigStorageImpl
+import com.example.smarttracker.data.local.SettingsStorage
+import com.example.smarttracker.data.local.SettingsStorageImpl
 import com.example.smarttracker.data.local.TokenStorage
 import com.example.smarttracker.data.local.TokenStorageImpl
 import com.example.smarttracker.data.local.UserProfileCache
@@ -57,6 +59,12 @@ abstract class AuthModule {
     @Binds
     @Singleton
     abstract fun bindRoleConfigStorage(impl: RoleConfigStorageImpl): RoleConfigStorage
+
+    @Binds
+    @Singleton
+    // Настройки приложения (автопауза, голосовые подсказки, keepScreenOn) —
+    // DataStore Preferences, см. SettingsStorageImpl.
+    abstract fun bindSettingsStorage(impl: SettingsStorageImpl): SettingsStorage
 
     @Binds
     @Singleton

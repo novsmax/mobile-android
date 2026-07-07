@@ -1,0 +1,55 @@
+package com.example.smarttracker.data.local
+
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * Пользовательские настройки приложения (экран «Меню → Настройки»).
+ *
+ * Дефолты выбраны осознанно:
+ *  - [autopauseEnabled] = false — автопауза меняет поведение записи тренировки,
+ *    пользователь включает её сам (меньше сюрпризов «трекер сам остановился»);
+ *  - [voiceCuesEnabled] = true — подсказки не влияют на записываемые данные,
+ *    легко выключить; фича заметна сразу;
+ *  - [voiceCueIntervalKm] = 1 — стандарт беговых приложений;
+ *  - [keepScreenOn] = false — экономия батареи по умолчанию.
+ */
+data class AppSettings(
+    val autopauseEnabled: Boolean = false,
+    val voiceCuesEnabled: Boolean = true,
+    val voiceCueIntervalKm: Int = 1,
+    val keepScreenOn: Boolean = false,
+) {
+    companion object {
+        /** Допустимые интервалы голосовых подсказок, км. */
+        val ALLOWED_VOICE_INTERVALS = listOf(1, 2, 5)
+    }
+}
+
+/**
+ * Контракт хранилища настроек. Реализация — [SettingsStorageImpl] на
+ * DataStore Preferences (первое использование DataStore в проекте; настройки
+ * не чувствительные — шифрование, как у токенов, не требуется).
+ *
+ * Потребители:
+ *  - SettingsViewModel (экран настроек) — чтение + запись;
+ *  - LocationTrackingService — чтение (автопауза, голосовые подсказки);
+ *  - WorkoutStartViewModel — чтение (keepScreenOn).
+ */
+interface SettingsStorage {
+
+    /**
+     * Поток настроек: эмитит текущее значение и все последующие изменения.
+     * Изменение настройки во время активной тренировки подхватывается сервисом
+     * без перезапуска записи.
+     */
+    val settings: Flow<AppSettings>
+
+    suspend fun setAutopauseEnabled(enabled: Boolean)
+
+    suspend fun setVoiceCuesEnabled(enabled: Boolean)
+
+    /** Значения вне [AppSettings.ALLOWED_VOICE_INTERVALS] приводятся к дефолту (1 км). */
+    suspend fun setVoiceCueIntervalKm(intervalKm: Int)
+
+    suspend fun setKeepScreenOn(enabled: Boolean)
+}
