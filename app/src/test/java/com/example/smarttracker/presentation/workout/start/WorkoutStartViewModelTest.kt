@@ -4,6 +4,8 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
+import com.example.smarttracker.data.local.AppSettings
+import com.example.smarttracker.data.local.SettingsStorage
 import com.example.smarttracker.data.location.LocationConfig
 import com.example.smarttracker.data.location.LocationTrackingService
 import com.example.smarttracker.data.location.OfflineMapManager
@@ -169,6 +171,9 @@ class WorkoutStartViewModelTest {
         }
         offlineMapManager = mock()
         offlineFinishScheduler = mock()
+        val settingsStorage: SettingsStorage = mock {
+            on { settings } doReturn flowOf(AppSettings())
+        }
         return WorkoutStartViewModel(
             workoutRepository,
             locationRepository,
@@ -176,6 +181,7 @@ class WorkoutStartViewModelTest {
             offlineMapManager,
             authRepository,
             offlineFinishScheduler,
+            settingsStorage,
             context,
         ).also { lastVm = it }
     }

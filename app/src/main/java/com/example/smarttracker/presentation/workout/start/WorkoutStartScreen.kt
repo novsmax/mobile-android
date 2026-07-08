@@ -87,10 +87,16 @@ import com.example.smarttracker.presentation.theme.ColorSecondary
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
 import com.example.smarttracker.presentation.workout.permission.LocationPermissionHandler
+import androidx.compose.runtime.rememberCoroutineScope
 import com.example.smarttracker.presentation.workout.summary.ScrubDisplayStats
+import com.example.smarttracker.presentation.workout.summary.ShareImageComposer
 import com.example.smarttracker.presentation.workout.summary.StatsOverlayCard
 import com.example.smarttracker.presentation.workout.summary.SummaryBody
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import com.example.smarttracker.presentation.workout.summary.SummaryDetailsPanel
 import com.example.smarttracker.presentation.workout.summary.SummaryHeader
+import com.example.smarttracker.presentation.workout.summary.summaryHasDetails
 import com.example.smarttracker.presentation.workout.summary.SummaryOrigin
 import com.example.smarttracker.presentation.workout.summary.TrainingProgressBar
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
@@ -170,6 +176,16 @@ fun WorkoutStartScreen(
     // Локальное состояние шторки выбора активности — чисто UI, не нужно в ViewModel
     var showTypeSelector by remember { mutableStateOf(false) }
 
+    // ── «Не гасить экран» (Меню → Настройки) ─────────────────────────────────
+    // View.keepScreenOn вместо флага окна Activity: снимается автоматически
+    // когда composable покидает композицию (уход с вкладки/экрана), не требует
+    // доступа к Window. Активен только во время записи тренировки.
+    val rootView = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(state.isTracking, state.keepScreenOn) {
+        rootView.keepScreenOn = state.isTracking && state.keepScreenOn
+        onDispose { rootView.keepScreenOn = false }
+    }
+
     // Счётчик recenter-тапов на GPS-бейдж. Передаётся в MapViewComposable как
     // recenterTrigger — каждое изменение значения (≠ 0) триггерит анимированное
     // центрирование карты на текущей позиции. Тип Int (не Boolean): два тапа
@@ -213,11 +229,38 @@ fun WorkoutStartScreen(
 
     val scrubPoint = scrubIndex?.let { summary?.trackPoints?.getOrNull(it) }
 
+    // ── Панель деталей (сплиты/график) ──────────────────────────────────────
+    // Разворачивается чевроном на StatsRow и рисуется поверх зоны карты —
+    // сама карта остаётся в композиции (пересоздание MapView ломает MapLibre).
+    // remember(summary): при открытии другой тренировки панель сворачивается.
+    var detailsExpanded by remember(summary) { mutableStateOf(false) }
+    val hasDetails = summary != null && summaryHasDetails(summary)
+
+    // ── Шаринг тренировки картинкой ─────────────────────────────────────────
+    // «С картой»: инкремент счётчика → MapViewComposable делает snapshot →
+    // onSnapshot дорисовывает плашку и открывает share sheet.
+    // «Только статистика»: карточка с силуэтом трека собирается сразу.
+    // Сборка Bitmap и запись PNG — на IO (блокирующие операции).
+    val shareScope = rememberCoroutineScope()
+    var snapshotTick by remember { mutableIntStateOf(0) }
+    fun shareStatsOf(s: WorkoutSummaryUiState) = ShareImageComposer.ShareStats(
+        activityName = s.activityName,
+        dateDisplay = s.dateDisplay,
+        distanceDisplay = s.distanceDisplay,
+        durationDisplay = s.durationDisplay,
+        paceDisplay = s.paceDisplay,
+    )
+
     // ── Системная кнопка Back ────────────────────────────────────────────────
     // В полноэкранном режиме карты — сворачиваем к обычному оверлею.
+    // При развёрнутых деталях — сворачиваем панель.
     // В обычном оверлее — закрываем оверлей и возвращаем экран в исходное состояние.
     BackHandler(enabled = overlayVisible) {
-        if (isFullscreen) onToggleFullscreenMap() else onCloseSummary()
+        when {
+            isFullscreen -> onToggleFullscreenMap()
+            detailsExpanded -> detailsExpanded = false
+            else -> onCloseSummary()
+        }
     }
 
     Column(
@@ -246,6 +289,15 @@ fun WorkoutStartScreen(
                     // не предлагает удаление (юзер только что закончил тренировку).
                     showDelete = summary.origin == SummaryOrigin.HISTORY,
                     onDeleteClick = onDeleteHistoryTraining,
+                    onShareWithMap = { snapshotTick++ },
+                    onShareStatsOnly = {
+                        shareScope.launch(Dispatchers.IO) {
+                            val bitmap = ShareImageComposer.composeTrackCard(
+                                ctx, summary.trackPoints, shareStatsOf(summary)
+                            )
+                            ShareImageComposer.shareBitmap(ctx, bitmap)
+                        }
+                    },
                 )
             } else {
                 ActiveHeader(dateDisplay = state.currentDate)
@@ -301,7 +353,15 @@ fun WorkoutStartScreen(
                 }
                 // Summary body — placeholder пока оверлея нет (фиксирует высоту).
                 Box(modifier = Modifier.alpha(summaryAlpha)) {
-                    SummaryBody(state = summary ?: WorkoutSummaryUiState())
+                    SummaryBody(
+                        state = summary ?: WorkoutSummaryUiState(),
+                        detailsExpanded = detailsExpanded,
+                        onToggleDetails = if (hasDetails) {
+                            { detailsExpanded = !detailsExpanded }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }
@@ -358,17 +418,49 @@ fun WorkoutStartScreen(
                 // Recenter по тапу на GPS-бейдж — счётчик инкрементируется
                 // в onClick ниже, карта реагирует через LaunchedEffect(recenterTrigger).
                 recenterTrigger = recenterTick,
+                // Снимок карты для шаринга: счётчик инкрементируется в диалоге
+                // SummaryHeader («С картой»), Bitmap приходит сюда.
+                snapshotRequest = snapshotTick,
+                onSnapshot = { mapBitmap ->
+                    val s = state.summaryOverlay
+                    if (s != null) {
+                        shareScope.launch(Dispatchers.IO) {
+                            val bitmap = ShareImageComposer.composeWithMap(
+                                ctx, mapBitmap, shareStatsOf(s)
+                            )
+                            ShareImageComposer.shareBitmap(ctx, bitmap)
+                        }
+                    }
+                },
             )
 
             // Прозрачный слой для перехвата клика в режиме превью оверлея.
             // MapView внутри AndroidView поглощает тапы, поэтому Modifier.clickable
             // на самой карте не работает. Накладываем Box сверху.
-            if (overlayVisible && !isFullscreen) {
+            // При развёрнутых деталях перехват отключён — тап должен оставаться
+            // в панели, а не разворачивать карту под ней.
+            if (overlayVisible && !isFullscreen && !detailsExpanded) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .clickable(onClick = onToggleFullscreenMap)
                 )
+            }
+
+            // ── Панель деталей: сплиты + график поверх зоны карты ────────────
+            // Карта не убирается из композиции (MapLibre-краши при пересоздании),
+            // панель просто накрывает её непрозрачным фоном.
+            if (overlayVisible && !isFullscreen && detailsExpanded && summary != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(ColorBackground),
+                ) {
+                    SummaryDetailsPanel(
+                        state = summary,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
 
             // ── Скрим-заглушка для API < 31 (blur недоступен) ───────────────

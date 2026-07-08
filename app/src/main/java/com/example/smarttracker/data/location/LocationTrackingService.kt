@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.example.smarttracker.R
+import com.example.smarttracker.data.local.SettingsStorage
 import com.example.smarttracker.presentation.MainActivity
 import com.example.smarttracker.utils.formatHhMmSs
 import com.example.smarttracker.data.location.model.TrackingConfig
@@ -28,6 +29,7 @@ import com.example.smarttracker.domain.model.LocationPoint
 import com.example.smarttracker.domain.model.METActivity
 import com.example.smarttracker.domain.repository.LocationRepository
 import com.example.smarttracker.domain.repository.WorkoutRepository
+import com.example.smarttracker.domain.usecase.CalculateTrainingStatsUseCase
 import com.example.smarttracker.domain.usecase.CalorieCalculator
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -96,6 +98,9 @@ class LocationTrackingService : Service() {
     @Inject
     lateinit var offlineMapManager: OfflineMapManager
 
+    @Inject
+    lateinit var settingsStorage: SettingsStorage
+
     // SupervisorJob: сбой одной корутины не отменяет остальные
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -122,6 +127,53 @@ class LocationTrackingService : Service() {
      * GPS-трекер продолжает работать при любом значении флага.
      */
     @Volatile private var isRecording: Boolean = true
+
+    // ── Автопауза ────────────────────────────────────────────────────────────────
+    /**
+     * true = текущая пауза поставлена автопаузой. Авто-резюм разрешён только для
+     * такой паузы: ручную (кнопка UI/notification) снимает только пользователь.
+     * Любая ручная команда EXTRA_RECORDING сбрасывает флаг.
+     */
+    @Volatile private var pausedByAuto: Boolean = false
+
+    /** Настройка «Автопауза» из [SettingsStorage]; обновляется подпиской в [onCreate]. */
+    @Volatile private var autopauseEnabled: Boolean = false
+
+    /** Распознаёт остановку/возобновление движения по скоростям точек. */
+    private val autopauseDetector = AutopauseDetector()
+
+    // ── Голосовые подсказки (TTS) ────────────────────────────────────────────────
+    // TTS живёт в сервисе, не во ViewModel: запись идёт с погашенным экраном,
+    // ViewModel может не существовать — подсказки должны звучать всё равно.
+    /** Настройки из [SettingsStorage]; обновляются подпиской в [onCreate]. */
+    @Volatile private var voiceCuesEnabled: Boolean = false
+    @Volatile private var voiceCueIntervalKm: Int = 1
+
+    private var tts: android.speech.tts.TextToSpeech? = null
+
+    /** true после успешной инициализации TTS с русским голосом. До готовности
+     *  (или при отсутствии голоса на устройстве) фразы молча дропаются. */
+    @Volatile private var ttsReady: Boolean = false
+
+    /** Решает, когда объявлять километровый рубеж, и считает темп круга. */
+    private val milestoneTracker = VoiceCueMilestoneTracker()
+
+    /**
+     * Накопленная дистанция записанных точек (м). ViewModel ведёт свой счётчик
+     * для UI; сервису нужен собственный — километровые объявления должны работать
+     * и с мёртвым ViewModel (экран погашен).
+     */
+    @Volatile private var accumulatedDistanceM: Double = 0.0
+
+    /** Предыдущая записанная точка для приращения дистанции.
+     *  null после resume/рестарта — телепорт через паузу дистанцией не считается. */
+    private var prevDistancePoint: LocationPoint? = null
+
+    /** Haversine с фильтром accuracy — тот же расчёт, что в live-дистанции ViewModel. */
+    private val statsUseCase = CalculateTrainingStatsUseCase()
+
+    /** Аудиофокус с приглушением музыки на время фразы (см. [speak]). */
+    private var audioFocusRequest: android.media.AudioFocusRequest? = null
 
     // ── Crash-recovery ───────────────────────────────────────────────────────────
     private lateinit var recoveryPrefs: SharedPreferences
@@ -220,6 +272,94 @@ class LocationTrackingService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        // Настройки: живая подписка — переключение тумблеров во время тренировки
+        // применяется сразу. Выключение автопаузы при уже стоящей автопаузе не
+        // резюмит запись само: пользователь снимет паузу кнопкой.
+        scope.launch {
+            settingsStorage.settings.collect { s ->
+                autopauseEnabled = s.autopauseEnabled
+                voiceCuesEnabled = s.voiceCuesEnabled
+                voiceCueIntervalKm = s.voiceCueIntervalKm
+            }
+        }
+        initTts()
+    }
+
+    /**
+     * Асинхронная инициализация TTS. Русский голос может отсутствовать —
+     * тогда подсказки молча отключаются (лог, не краш): фича деградирует,
+     * запись тренировки не страдает.
+     */
+    private fun initTts() {
+        tts = android.speech.tts.TextToSpeech(this) { status ->
+            if (status != android.speech.tts.TextToSpeech.SUCCESS) {
+                Log.w(TAG, "TTS init failed: status=$status, voice cues disabled")
+                return@TextToSpeech
+            }
+            val langResult = tts?.setLanguage(java.util.Locale("ru"))
+            if (langResult == android.speech.tts.TextToSpeech.LANG_MISSING_DATA ||
+                langResult == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
+            ) {
+                Log.w(TAG, "Russian TTS voice unavailable, voice cues disabled")
+                return@TextToSpeech
+            }
+            tts?.setAudioAttributes(ttsAudioAttributes)
+            // Аудиофокус отпускается по окончании фразы — музыка возвращает громкость.
+            tts?.setOnUtteranceProgressListener(
+                object : android.speech.tts.UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+                    override fun onDone(utteranceId: String?) = abandonAudioFocus()
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) = abandonAudioFocus()
+                    override fun onError(utteranceId: String?, errorCode: Int) = abandonAudioFocus()
+                }
+            )
+            ttsReady = true
+        }
+    }
+
+    /** Речевые атрибуты: навигационная подсказка поверх музыки (duck, не пауза). */
+    private val ttsAudioAttributes: android.media.AudioAttributes by lazy {
+        android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
+
+    /**
+     * Произносит фразу с запросом transient-аудиофокуса (MAY_DUCK):
+     * фоновая музыка приглушается, не останавливаясь. До готовности TTS
+     * или при выключенных подсказках — no-op.
+     */
+    private fun speak(phrase: String) {
+        if (!ttsReady || !voiceCuesEnabled) return
+        requestAudioFocus()
+        tts?.speak(
+            phrase,
+            android.speech.tts.TextToSpeech.QUEUE_ADD,
+            null,
+            "cue-${System.currentTimeMillis()}",
+        )
+    }
+
+    private fun requestAudioFocus() {
+        val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        val request = audioFocusRequest ?: android.media.AudioFocusRequest
+            .Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(ttsAudioAttributes)
+            .build()
+            .also { audioFocusRequest = it }
+        am.requestAudioFocus(request)
+    }
+
+    private fun abandonAudioFocus() {
+        val request = audioFocusRequest ?: return
+        (getSystemService(AUDIO_SERVICE) as android.media.AudioManager)
+            .abandonAudioFocusRequest(request)
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         recoveryPrefs = getSharedPreferences(LocationConfig.PREFS_RECOVERY, MODE_PRIVATE)
@@ -333,6 +473,11 @@ class LocationTrackingService : Service() {
             pausedAccumulatedMs = 0L
             lastSpeedMps        = null
             recordedPointCount  = 0
+            pausedByAuto        = false
+            autopauseDetector.reset()
+            accumulatedDistanceM = 0.0
+            prevDistancePoint    = null
+            milestoneTracker.reset()
 
             // 6. Crash-recovery и finishSyncFlow
             recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, newId).apply()
@@ -402,50 +547,9 @@ class LocationTrackingService : Service() {
         if (intent?.hasExtra(EXTRA_RECORDING) == true) {
             if (trainingId.isNotBlank() && activeTracker != null) {
                 val newRecording = intent.getBooleanExtra(EXTRA_RECORDING, true)
-                // Идемпотентность: повторное нажатие той же кнопки (двойной тап в notification)
-                // не должно ломать счётчик pausedAccumulatedMs.
-                if (newRecording == isRecording) {
-                    return START_STICKY
-                }
-                if (newRecording) {
-                    // Resume: сдвигаем sessionStartedAt в прошлое на накопленный elapsed,
-                    // чтобы chronometer продолжил с того же значения.
-                    sessionStartedAt = System.currentTimeMillis() - pausedAccumulatedMs
-                    // Сбрасываем предыдущую точку — пауза не должна попасть в интервал калорий.
-                    prevCaloriePoint = null
-                } else {
-                    // Pause: фиксируем суммарный elapsed как разницу между now и виртуальной
-                    // базой sessionStartedAt. Использовать `=`, не `+=`: после прошлого
-                    // resume sessionStartedAt уже сдвинут в прошлое на накопленный elapsed,
-                    // поэтому (now - sessionStartedAt) — это полный суммарный elapsed,
-                    // а не дельта новой активной фазы.
-                    if (sessionStartedAt > 0L) {
-                        pausedAccumulatedMs = System.currentTimeMillis() - sessionStartedAt
-                    }
-                    // Персистим gap-индекс паузы: при crash-recovery ViewModel восстановит
-                    // pauseGapIndices — без них дистанция после рестарта посчитала бы
-                    // «телепорт» через паузу как реальное движение.
-                    if (!isDiscovery) {
-                        val existing = recoveryPrefs.getString(
-                            LocationConfig.KEY_PAUSE_GAP_INDICES, ""
-                        ).orEmpty()
-                        val updated = if (existing.isBlank()) "$recordedPointCount"
-                                      else "$existing,$recordedPointCount"
-                        recoveryPrefs.edit()
-                            .putString(LocationConfig.KEY_PAUSE_GAP_INDICES, updated)
-                            .apply()
-                    }
-                }
-                isRecording = newRecording
-
-                persistSessionState()
-
-                // Сообщаем ViewModel о смене состояния — синхронизирует UI когда
-                // pause/resume инициирован из notification, и передаёт точный
-                // gap-индекс (recordedPointCount) на момент паузы.
-                _recordingStateFlow.tryEmit(RecordingState(newRecording, recordedPointCount))
-
-                rebuildNotification()
+                // Ручная команда (кнопка UI или notification): byAuto = false —
+                // сбрасывает pausedByAuto, ручную паузу автопауза резюмить не будет.
+                applyRecordingChange(newRecording, byAuto = false)
                 return START_STICKY
             } else {
                 stopSelf()
@@ -500,6 +604,11 @@ class LocationTrackingService : Service() {
                 lastSpeedMps        = null
                 recordedPointCount  = 0
                 isRecording         = true
+                pausedByAuto        = false
+                autopauseDetector.reset()
+                accumulatedDistanceM = 0.0
+                prevDistancePoint    = null
+                milestoneTracker.reset()
                 persistSessionProfile(intent, intervalMs)
             } else {
                 sessionStartedAt = recoveryPrefs.getLong(
@@ -515,6 +624,20 @@ class LocationTrackingService : Service() {
                 // Без восстановления флага рестарт молча продолжал запись, а chronometer
                 // включал паузу в elapsed (sessionStartedAt оставался временем старого resume).
                 isRecording = recoveryPrefs.getBoolean(LocationConfig.KEY_IS_RECORDING, true)
+                // Автопауза переживает рестарт: если пауза была автоматической,
+                // движение после восстановления снимет её авто-резюмом.
+                pausedByAuto = recoveryPrefs.getBoolean(LocationConfig.KEY_PAUSED_BY_AUTO, false)
+                // Голосовые подсказки: восстановление дистанции и последнего
+                // объявленного рубежа — иначе объявления начались бы с нуля.
+                accumulatedDistanceM = recoveryPrefs
+                    .getFloat(LocationConfig.KEY_ACCUM_DISTANCE_M, 0f).toDouble()
+                milestoneTracker.restore(
+                    lastAnnouncedKm = recoveryPrefs.getInt(LocationConfig.KEY_LAST_ANNOUNCED_KM, 0),
+                    lastMilestoneElapsedMs = recoveryPrefs
+                        .getLong(LocationConfig.KEY_LAST_MILESTONE_ELAPSED_MS, 0L),
+                )
+                // Разрыв через рестарт дистанцией не считается.
+                prevDistancePoint = null
             }
             recoveryPrefs.edit().putString(LocationConfig.KEY_ACTIVE_TRAINING, trainingId).apply()
             persistSessionState()
@@ -775,6 +898,37 @@ class LocationTrackingService : Service() {
             }
         }
 
+        // ── Автопауза: детектор питается точками ДО слоя 4 ───────────────────────
+        // Слой 4 отбрасывает стоячие точки (dist < antijitter) — именно они и
+        // сигнализируют остановку; после него детектор никогда не увидел бы паузу.
+        // Скорость: sensor-speed, при её отсутствии — дистанция/время от prev
+        // (accuracy-дрейф уже отсечён слоями 1 и 3).
+        if (!isDiscovery && autopauseEnabled && trainingId.isNotBlank() &&
+            System.currentTimeMillis() - sessionStartedAt >= LocationConfig.AUTOPAUSE_WARMUP_MS
+        ) {
+            val detectorSpeedMps: Float? = when {
+                location.hasSpeed() -> location.speed
+                prev != null -> {
+                    val dtSec = (location.time - prev.time) / 1000.0
+                    if (dtSec > 0) (prev.distanceTo(location) / dtSec).toFloat() else null
+                }
+                else -> null
+            }
+            when (autopauseDetector.onPoint(detectorSpeedMps, location.time, isRecording)) {
+                AutopauseDetector.Event.PAUSE -> {
+                    Log.d(TAG, "Autopause: stillness detected, pausing")
+                    applyRecordingChange(newRecording = false, byAuto = true)
+                }
+                AutopauseDetector.Event.RESUME ->
+                    // Ручную паузу авто-резюм не трогает — только свою.
+                    if (pausedByAuto) {
+                        Log.d(TAG, "Autopause: movement detected, resuming")
+                        applyRecordingChange(newRecording = true, byAuto = true)
+                    }
+                AutopauseDetector.Event.NONE -> Unit
+            }
+        }
+
         // ── Слой 4: антидребезг по расстоянию ───────────────────────────────────
         // Пропускаем если устройство фактически не двигалось.
         // Первая точка (prev == null) проходит всегда.
@@ -856,7 +1010,29 @@ class LocationTrackingService : Service() {
         // флашится в Room, поэтому recordedPointCount == будущему числу точек в Room.
         // Только для тренировки — discovery-точки пишутся под другим trainingId.
         // Инкремент на Main-looper'е (callback GPS) — без гонки с чтением в onStartCommand.
-        if (!isDiscovery) recordedPointCount++
+        if (!isDiscovery) {
+            recordedPointCount++
+
+            // ── Дистанция сервиса + километровые голосовые подсказки ─────────
+            // prevDistancePoint = null после resume/рестарта — телепорт через
+            // паузу дистанцией не считается (симметрично gap-парам ViewModel).
+            prevDistancePoint?.let {
+                accumulatedDistanceM += statsUseCase.distanceBetween(it, point)
+            }
+            prevDistancePoint = point
+            // Трекер двигается независимо от тумблера подсказок: включение
+            // мид-тренировки продолжит объявления со следующего рубежа,
+            // а не выдаст пачку пропущенных.
+            val elapsedMs = if (sessionStartedAt > 0L)
+                System.currentTimeMillis() - sessionStartedAt else 0L
+            milestoneTracker.onDistance(accumulatedDistanceM, elapsedMs, voiceCueIntervalKm)
+                ?.let { cue ->
+                    speak(TtsPhraseFormatter.kilometerCue(cue.km, cue.lapPaceMsPerKm))
+                    // Рубеж — редкое событие; персист сразу, чтобы crash-recovery
+                    // не повторил объявление.
+                    persistSessionState()
+                }
+        }
 
         scope.launch {
             bufferMutex.withLock {
@@ -954,6 +1130,13 @@ class LocationTrackingService : Service() {
         flushTimerJob?.cancel()
         syncJob?.cancel()
 
+        // TTS: остановить текущую фразу и освободить engine + аудиофокус.
+        ttsReady = false
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+        abandonAudioFocus()
+
         // Финальный сброс буфера + sync или очистка discovery-точек.
         // Захватываем значения полей до scope.launch: onStartCommand мог уже переключить
         // isDiscovery на false (Android переиспользует сервис при stop+start), поэтому
@@ -1032,6 +1215,75 @@ class LocationTrackingService : Service() {
      * `setUsesChronometer` — Android System UI сам тикает таймер раз в секунду
      * без необходимости вызывать `notify()` для обновления времени.
      */
+    /**
+     * Единый путь смены состояния записи — и для ручных команд (EXTRA_RECORDING),
+     * и для автопаузы. Идемпотентен: повторная команда с тем же значением
+     * (двойной тап по кнопке notification) не ломает счётчик pausedAccumulatedMs.
+     *
+     * @param byAuto true = инициатор автопауза; только такая пауза может быть
+     *   снята авто-резюмом. Ручная команда всегда сбрасывает [pausedByAuto].
+     */
+    private fun applyRecordingChange(newRecording: Boolean, byAuto: Boolean) {
+        if (newRecording == isRecording) {
+            // Состояние не меняется, но ручная команда «Пауза» поверх уже стоящей
+            // автопаузы переводит паузу в ручную: авто-резюм отключается, снять
+            // её сможет только пользователь.
+            if (!byAuto) pausedByAuto = false
+            return
+        }
+        if (newRecording) {
+            // Resume: сдвигаем sessionStartedAt в прошлое на накопленный elapsed,
+            // чтобы chronometer продолжил с того же значения.
+            sessionStartedAt = System.currentTimeMillis() - pausedAccumulatedMs
+            // Сбрасываем предыдущую точку — пауза не должна попасть в интервал калорий.
+            prevCaloriePoint = null
+            // Аналогично для дистанции подсказок: телепорт через паузу не считается.
+            prevDistancePoint = null
+        } else {
+            // Pause: фиксируем суммарный elapsed как разницу между now и виртуальной
+            // базой sessionStartedAt. Использовать `=`, не `+=`: после прошлого
+            // resume sessionStartedAt уже сдвинут в прошлое на накопленный elapsed,
+            // поэтому (now - sessionStartedAt) — это полный суммарный elapsed,
+            // а не дельта новой активной фазы.
+            if (sessionStartedAt > 0L) {
+                pausedAccumulatedMs = System.currentTimeMillis() - sessionStartedAt
+            }
+            // Персистим gap-индекс паузы: при crash-recovery ViewModel восстановит
+            // pauseGapIndices — без них дистанция после рестарта посчитала бы
+            // «телепорт» через паузу как реальное движение.
+            if (!isDiscovery) {
+                val existing = recoveryPrefs.getString(
+                    LocationConfig.KEY_PAUSE_GAP_INDICES, ""
+                ).orEmpty()
+                val updated = if (existing.isBlank()) "$recordedPointCount"
+                              else "$existing,$recordedPointCount"
+                recoveryPrefs.edit()
+                    .putString(LocationConfig.KEY_PAUSE_GAP_INDICES, updated)
+                    .apply()
+            }
+        }
+        isRecording = newRecording
+        pausedByAuto = !newRecording && byAuto
+        // Смена состояния любым инициатором сбрасывает распознавание — серия
+        // «стоячих»/«движущихся» точек прошлого состояния не должна утекать в новое.
+        autopauseDetector.reset()
+
+        persistSessionState()
+
+        // Сообщаем ViewModel о смене состояния — синхронизирует UI когда
+        // pause/resume инициирован из notification или автопаузой, и передаёт
+        // точный gap-индекс (recordedPointCount) на момент паузы.
+        _recordingStateFlow.tryEmit(RecordingState(newRecording, recordedPointCount))
+
+        // Голосовое подтверждение автопаузы: экран погашен, телефон в кармане —
+        // без звука пользователь не узнает, что трекер остановился/продолжил.
+        if (byAuto) {
+            speak(if (newRecording) TtsPhraseFormatter.RESUME_CUE else TtsPhraseFormatter.AUTOPAUSE_CUE)
+        }
+
+        rebuildNotification()
+    }
+
     private fun buildNotification(): Notification {
         val isPaused = !isRecording
 
@@ -1039,6 +1291,10 @@ class LocationTrackingService : Service() {
         // На паузе chronometer выключен (Android System UI не тикает) — поэтому
         // вшиваем сюда статичный elapsed на момент паузы для контекста.
         val contentText: String = when {
+            // Автопауза помечается отдельно: пользователь должен понимать, что
+            // трекер остановился сам и сам продолжит при движении.
+            isPaused && pausedByAuto ->
+                getString(R.string.notif_autopaused, formatHhMmSs(pausedAccumulatedMs))
             isPaused -> getString(R.string.notif_paused, formatHhMmSs(pausedAccumulatedMs))
             lastSpeedMps != null -> getString(
                 R.string.notif_speed_kmh_format,
@@ -1115,6 +1371,13 @@ class LocationTrackingService : Service() {
             .putLong(LocationConfig.KEY_PAUSED_ACCUMULATED_MS, pausedAccumulatedMs)
             .putInt(LocationConfig.KEY_RECORDED_POINT_COUNT, recordedPointCount)
             .putBoolean(LocationConfig.KEY_IS_RECORDING, isRecording)
+            .putBoolean(LocationConfig.KEY_PAUSED_BY_AUTO, pausedByAuto)
+            .putFloat(LocationConfig.KEY_ACCUM_DISTANCE_M, accumulatedDistanceM.toFloat())
+            .putInt(LocationConfig.KEY_LAST_ANNOUNCED_KM, milestoneTracker.lastAnnouncedKm)
+            .putLong(
+                LocationConfig.KEY_LAST_MILESTONE_ELAPSED_MS,
+                milestoneTracker.lastMilestoneElapsedMs,
+            )
             // Heartbeat: ViewModel по нему отличает живую сессию (сервис работает
             // или вот-вот перезапустится START_STICKY) от протухшей (force-stop,
             // рестарт не придёт) — см. readRecoverableSession.

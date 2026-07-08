@@ -41,6 +41,7 @@ import com.example.smarttracker.presentation.workout.start.WorkoutStartViewModel
 fun WorkoutHomeScreen(
     onLogout: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
 ) {
     var currentTab by remember { mutableStateOf(WorkoutTab.START) }
 
@@ -97,6 +98,7 @@ fun WorkoutHomeScreen(
             WorkoutTab.MENU    -> MenuScreen(
                 padding = padding,
                 onNavigateToProfile = onNavigateToProfile,
+                onNavigateToSettings = onNavigateToSettings,
             )
         }
     }

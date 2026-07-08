@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.smarttracker.data.local.SettingsStorage
 import com.example.smarttracker.data.location.LocationConfig
 import com.example.smarttracker.data.location.LocationTrackingService
 import com.example.smarttracker.utils.formatHhMmSs
@@ -20,6 +21,7 @@ import com.example.smarttracker.domain.repository.AuthRepository
 import com.example.smarttracker.domain.repository.LocationRepository
 import com.example.smarttracker.domain.repository.WorkoutRepository
 import com.example.smarttracker.domain.usecase.CalculateTrainingStatsUseCase
+import com.example.smarttracker.presentation.workout.summary.SplitsBuilder
 import com.example.smarttracker.presentation.workout.summary.SummaryOrigin
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryUiState
@@ -72,6 +74,7 @@ class WorkoutStartViewModel @Inject constructor(
     private val offlineMapManager: OfflineMapManager,
     private val authRepository: AuthRepository,
     private val offlineFinishScheduler: OfflineFinishScheduler,
+    private val settingsStorage: SettingsStorage,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -146,6 +149,11 @@ class WorkoutStartViewModel @Inject constructor(
         val mapTilesFailed: Boolean = false,
         /** true пока выполняется POST /training/start — блокирует кнопку «Начать» */
         val isStarting: Boolean = false,
+        /**
+         * Настройка «не гасить экран во время тренировки» (Меню → Настройки).
+         * Флаг окна ставит WorkoutStartScreen только при активной записи.
+         */
+        val keepScreenOn: Boolean = false,
         /** Множество iconKey избранных типов активностей, хранится в SharedPreferences */
         val favoriteIds: Set<String> = emptySet(),
         /** Поисковый запрос в шторке выбора активности */
@@ -235,6 +243,13 @@ class WorkoutStartViewModel @Inject constructor(
         collectWorkoutTypes()
         loadUserProfile()
         observeServiceRecordingState()
+        // Настройка «не гасить экран»: пробрасывается в UiState, сам флаг окна
+        // ставит WorkoutStartScreen (view.keepScreenOn) только при isTracking.
+        viewModelScope.launch {
+            settingsStorage.settings.collect { s ->
+                _state.update { it.copy(keepScreenOn = s.keepScreenOn) }
+            }
+        }
         val favIds = loadFavoriteIds()
         if (favIds.isNotEmpty()) _state.update { it.copy(favoriteIds = favIds) }
         // Сначала читаем последнюю сохранённую точку для начального центрирования карты.
@@ -728,6 +743,7 @@ class WorkoutStartViewModel @Inject constructor(
                                 else
                                     System.currentTimeMillis()
         val type = state.selectedType
+        val summaryCumData = buildCumulativeData(state.trackPoints, state.pauseGapIndices)
         val snapshot = WorkoutSummaryUiState(
             origin           = SummaryOrigin.FINISH,
             dateDisplay      = WorkoutSummaryFormatters.formatDate(summaryStartTs),
@@ -740,7 +756,9 @@ class WorkoutStartViewModel @Inject constructor(
             durationDisplay  = WorkoutSummaryFormatters.formatDuration(summaryDurationMs),
             elevationDisplay = WorkoutSummaryFormatters.formatElevation(summaryElevationM),
             trackPoints      = state.trackPoints,
-            cumulativeData   = buildCumulativeData(state.trackPoints, state.pauseGapIndices),
+            cumulativeData   = summaryCumData,
+            splits           = SplitsBuilder.buildSplits(summaryCumData),
+            pauseGapIndices  = state.pauseGapIndices,
             isLoading        = false,
         )
 
@@ -1001,6 +1019,10 @@ class WorkoutStartViewModel @Inject constructor(
                 elevationDisplay = WorkoutSummaryFormatters.formatElevation(elevationM),
                 trackPoints      = points,
                 cumulativeData   = cumData,
+                // Сплиты появятся, когда бэк начнёт отдавать реальные временные
+                // метки трека (BR-5) — buildSplits сам гейтит по правдоподобию
+                // elapsed (синтетические timestampUtc = index дают elapsed в мс).
+                splits           = SplitsBuilder.buildSplits(cumData),
             )
             // Защита от гонки: если оверлей закрыли или уже переключили на другую
             // тренировку, пока шла загрузка, не перетираем актуальный snapshot.

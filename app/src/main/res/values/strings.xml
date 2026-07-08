@@ -58,6 +58,7 @@
     <string name="notif_speed_kmh_format">Скорость: %1$.1f км/ч</string>
     <string name="notif_speed_unknown">Скорость: —</string>
     <string name="notif_paused">На паузе (%1$s)</string>
+    <string name="notif_autopaused">Автопауза (%1$s)</string>
     <string name="notif_action_pause">Пауза</string>
     <string name="notif_action_resume">Продолжить</string>
 
