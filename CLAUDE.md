@@ -149,12 +149,16 @@ com.example.smarttracker/
 │   │   │   └── mapper/  ActivityTypeMapper, METMapper
 │   │   ├── TokenStorage + TokenStorageImpl     (EncryptedSharedPreferences)
 │   │   ├── RoleConfigStorage + RoleConfigStorageImpl
+│   │   ├── SettingsStorage + SettingsStorageImpl  (DataStore Prefs, AppSettings)
 │   │   ├── UserProfileCache + UserProfileCacheImpl  (in-memory)
 │   │   └── IconCacheManager                    (filesDir/activity_icons/{id}.png)
 │   ├── location/
-│   │   ├── LocationTrackingService.kt          (foreground service)
+│   │   ├── LocationTrackingService.kt          (foreground service, TTS-подсказки)
 │   │   ├── LocationTrackerFactory.kt           (runtime: GMS/HMS/AOSP)
 │   │   ├── RuntimeDetector.kt
+│   │   ├── AutopauseDetector.kt                (чистый, гистерезис, нюанс 31)
+│   │   ├── TtsPhraseFormatter.kt               (русские склонения фраз TTS)
+│   │   ├── VoiceCueMilestoneTracker.kt         (км-рубежи, темп круга)
 │   │   ├── LocationConfig.kt
 │   │   ├── OfflineMapManager.kt                (no-op стаб после перехода на raster-тайлы)
 │   │   ├── tracker/   LocationTracker (интерфейс), GmsLocationTracker,
@@ -236,14 +240,16 @@ com.example.smarttracker/
 │   │                CalendarFormatters
 │   ├── menu/
 │   │   ├── MenuScreen.kt
-│   │   └── profile/  ProfileScreen, ProfileViewModel, ProfileUiState,
-│   │                 ProfileEditScreen, ProfileEditViewModel, ProfileEditUiState
+│   │   ├── profile/  ProfileScreen, ProfileViewModel, ProfileUiState,
+│   │   │             ProfileEditScreen, ProfileEditViewModel, ProfileEditUiState
+│   │   └── settings/ SettingsScreen, SettingsViewModel
 │   └── workout/
 │       ├── WorkoutHomeScreen.kt        (Scaffold + нижний бар)
 │       ├── ActivityIcons.kt            (iconKey → drawable res)
 │       ├── start/      WorkoutStartScreen, WorkoutStartViewModel
 │       ├── summary/    SummaryOverlay, WorkoutSummaryUiState,
-│       │               WorkoutSummaryFormatters
+│       │               WorkoutSummaryFormatters, SplitsBuilder, TrackChart,
+│       │               SummaryDetailsPanel, ShareImageComposer
 │       ├── map/        MapViewComposable, OfflineMapFallback
 │       └── permission/ LocationPermissionHandler
 └── utils/       ApiErrorHandler (перевод ошибок API на русский),
@@ -453,6 +459,32 @@ com.example.smarttracker/
     чекаута `C:\Users\novsm\Documents\GitHub\mobile-android\`. `JAVA_HOME` в шелле не задан —
     ставить `$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"` перед gradlew.
 
+31. **Автопауза — детектор питается точками ДО слоя 4 фильтрации** — слой 4
+    (антидребезг, `MIN_DISTANCE_ANTIJITTER_M`) отбрасывает стоячие точки: после
+    него остановку не увидеть. `AutopauseDetector` вызывается между слоями 3 и 4
+    в `onLocationReceived`. Ручная пауза приоритетнее: авто-резюм снимает только
+    автопаузу (`pausedByAuto`), любая ручная команда `EXTRA_RECORDING` сбрасывает
+    флаг. Recovery: `KEY_PAUSED_BY_AUTO` переживает START_STICKY-рестарт.
+    Единый путь смены записи — `applyRecordingChange(newRecording, byAuto)`;
+    новую логику паузы добавлять туда, не в ветку интента.
+
+32. **TTS живёт в сервисе, не во ViewModel** — запись идёт с погашенным экраном,
+    ViewModel может не существовать. Сервис ведёт СВОЙ счётчик дистанции
+    (`accumulatedDistanceM`, `prevDistancePoint = null` после resume — телепорт
+    через паузу не считается). Русский голос может отсутствовать → фича молча
+    деградирует (лог, не краш). Аудиофокус `TRANSIENT_MAY_DUCK`, отпускается в
+    `onDone`. Recovery-ключи: `KEY_ACCUM_DISTANCE_M`, `KEY_LAST_ANNOUNCED_KM`,
+    `KEY_LAST_MILESTONE_ELAPSED_MS` — без них рестарт повторяет объявления.
+
+33. **Snapshot карты и панель деталей summary** — снимок MapLibre для шаринга:
+    счётчик-триггер `snapshotRequest` + `onSnapshot` в `MapViewComposable`
+    (паттерн `recenterTrigger`); в кадр попадает только MapView, Compose-оверлеи
+    поверх — нет. Панель деталей (сплиты/график) рисуется ПОВЕРХ зоны карты,
+    MapView из композиции не убирать (краши MapLibre). Сплиты/график скорости
+    гейтятся по `SplitsBuilder.hasRealTiming` (история до BR-5 имеет синтетические
+    timestampUtc = index) — после BR-5 включатся сами. Цвет линии графиков —
+    `ColorChartLine` (не `ColorSecondary`: тот даёт 2.7:1 на белом, ниже WCAG 3:1).
+
 ---
 
 ## Текущие ограничения и временные решения
@@ -462,6 +494,10 @@ com.example.smarttracker/
 
 **`WorkoutHomeScreen` активен** — маршрут `Screen.Home` ведёт на `WorkoutHomeScreen`.
 Вкладка «Тренировки» — история тренировок, pending.
+
+**Настройки активны** — Меню → Настройки (`Screen.Settings`): автопауза
+(дефолт выкл), голосовые подсказки (дефолт вкл, частота 1/2/5 км),
+«не гасить экран». Хранение — `SettingsStorage` (DataStore Preferences).
 
 **`WorkoutRepositoryImpl` активирован** — загружает типы активностей из `GET /training/types_activity`.
 Иконки кэшируются в `filesDir/activity_icons/{id}.png` через `IconCacheManager`.
@@ -561,7 +597,8 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
   `GetTrainingDetailResponseDto`: убрать `JsonElement?`, вернуть
   `List<GpsTrackPointDto>?`, добавить `recorded_at` в `GpsTrackPointDto`,
   обновить маппер. Разблокирует elapsed/скорость в scrub-оверлее истории
-  и экспорт GPX.
+  и экспорт GPX. Сплиты и график скорости в оверлее истории включатся
+  автоматически (гейт `SplitsBuilder.hasRealTiming`, нюанс 33).
 
 - **После BR-4 (`GET /auth/allowed-email-domains`)** — заменить
   `AllowedEmailDomainsRepositoryImpl` на сетевую реализацию с кэшем
