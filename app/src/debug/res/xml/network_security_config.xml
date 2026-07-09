@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-оверлей network_security_config (полностью ЗАМЕНЯЕТ main-версию
+    в debug-сборке: ресурсы buildType перекрывают main целиком, не мёржатся).
+
+    ВРЕМЕННО (local-api): разрешает HTTP (cleartext) к локальному API-серверу:
+    - 10.0.2.2      — localhost хост-машины из эмулятора;
+    - 192.168.0.105 — LAN-IP машины разработчика (для физического устройства;
+                      при смене IP в роутере — обновить здесь и в LOCAL_API_URL).
+    Все остальные соединения — только HTTPS.
+    TODO(local-api): удалить файл при возврате на prod-API (см. CLAUDE.md TODO).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">192.168.0.105</domain>
+    </domain-config>
+</network-security-config>
