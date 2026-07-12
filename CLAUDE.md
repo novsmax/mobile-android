@@ -594,12 +594,17 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
 > Android-часть, которая разблокируется после выполнения BR-задачи.
 
 - **ВРЕМЕННО: debug-сборка на локальном API** (июль 2026) — `BASE_URL` debug =
-  `http://10.0.2.2:8000/` (эмулятор; для устройства —
-  `-PLOCAL_API_URL=http://<LAN-IP>:8000/`), cleartext-разрешение — в
+  gradle-property `LOCAL_API_URL`, дефолт `http://10.0.2.2:8000/` (эмулятор).
+  Для физического устройства property прописана в
+  `%USERPROFILE%\.gradle\gradle.properties` (`LOCAL_API_URL=http://192.168.0.105:8000/`,
+  LAN-IP машины) — её подхватывает и Android Studio Run, и консольный gradlew;
+  `-P`-флаг не нужен. ⚠️ Run из студии БЕЗ этой property молча зашьёт 10.0.2.2 —
+  телефон будет получать SocketTimeout. Cleartext-разрешение — в
   `app/src/debug/res/xml/network_security_config.xml` (перекрывает main-версию
-  целиком). Тайловый сервер карты не затронут. **Откат:** вернуть prod-URL
-  в debug-блоке `app/build.gradle.kts` и удалить debug-оверлей
-  network_security_config. Release всегда на prod.
+  целиком; при смене LAN-IP обновить и его, и property). Тайловый сервер карты
+  не затронут. **Откат:** вернуть prod-URL в debug-блоке `app/build.gradle.kts`,
+  удалить debug-оверлей network_security_config и строку `LOCAL_API_URL` из
+  глобального gradle.properties. Release всегда на prod.
 
 - **После BR-5 (gps_track с `recorded_at`)** — обновить
   `GetTrainingDetailResponseDto`: убрать `JsonElement?`, вернуть
