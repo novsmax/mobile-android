@@ -64,7 +64,19 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "BASE_URL", "\"https://runtastic.gottland.ru/\"")
+            // ВРЕМЕННО: debug-сборка ходит на ЛОКАЛЬНЫЙ API-сервер (только API,
+            // тайловый сервер карты не затронут — его URL живёт в MapViewComposable).
+            // По умолчанию — адрес эмулятора: 10.0.2.2 = localhost хост-машины.
+            // Для физического устройства в той же Wi-Fi-сети передать LAN-IP машины:
+            //   ./gradlew installDebug "-PLOCAL_API_URL=http://192.168.0.105:8000/"
+            // (IP также добавить в src/debug/res/xml/network_security_config.xml).
+            // TODO(local-api): вернуть https://runtastic.gottland.ru/ после
+            // завершения локальной разработки бэкенда (см. CLAUDE.md TODO).
+            buildConfigField(
+                "String",
+                "BASE_URL",
+                "\"${providers.gradleProperty("LOCAL_API_URL").getOrElse("http://10.0.2.2:8000/")}\"",
+            )
         }
         release {
             // R8: минификация + обфускация. Правила — proguard-rules.pro.

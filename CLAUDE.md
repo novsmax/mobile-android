@@ -242,7 +242,7 @@ com.example.smarttracker/
 │   │   ├── MenuScreen.kt
 │   │   ├── profile/  ProfileScreen, ProfileViewModel, ProfileUiState,
 │   │   │             ProfileEditScreen, ProfileEditViewModel, ProfileEditUiState
-│   │   └── settings/ SettingsScreen, SettingsViewModel
+│   │   └── settings/ SettingsScreen, SettingsViewModel, VoiceCueSamplePlayer
 │   └── workout/
 │       ├── WorkoutHomeScreen.kt        (Scaffold + нижний бар)
 │       ├── ActivityIcons.kt            (iconKey → drawable res)
@@ -485,6 +485,16 @@ com.example.smarttracker/
     timestampUtc = index) — после BR-5 включатся сами. Цвет линии графиков —
     `ColorChartLine` (не `ColorSecondary`: тот даёт 2.7:1 на белом, ниже WCAG 3:1).
 
+34. **MapLibre LocationComponent нельзя активировать без гео-разрешения** —
+    активация + enable без Fine/Coarse роняет процесс `SecurityException`-ом
+    ИЗНУТРИ MapLibre: `MapView.onStart` → `LocationComponent.onStart` →
+    `LocationManager.getLastKnownLocation`. Вызов идёт из внутреннего Handler-а
+    карты — внешние `runCatching` бессильны. Проявляется на свежей установке
+    (диалог разрешения и загрузка style идут параллельно, style побеждает).
+    Фикс: параметр `locationPermissionGranted` в `MapViewComposable` гейтит
+    активацию; поздняя активация в `update`-блоке когда разрешение выдали;
+    страховка `checkSelfPermission` внутри `activateLocationComponent`.
+
 ---
 
 ## Текущие ограничения и временные решения
@@ -496,8 +506,11 @@ com.example.smarttracker/
 Вкладка «Тренировки» — история тренировок, pending.
 
 **Настройки активны** — Меню → Настройки (`Screen.Settings`): автопауза
-(дефолт выкл), голосовые подсказки (дефолт вкл, частота 1/2/5 км),
+(дефолт выкл), голосовые подсказки (дефолт вкл, частота 1/2/5 км, громкость),
 «не гасить экран». Хранение — `SettingsStorage` (DataStore Preferences).
+Слайдер громкости подсказок — НЕ настройка приложения: он крутит системную
+громкость медиа (`STREAM_MUSIC`) напрямую, в DataStore не пишет; по отпусканию
+`VoiceCueSamplePlayer` отыгрывает короткий шаблон фразы на этом уровне.
 
 **`WorkoutRepositoryImpl` активирован** — загружает типы активностей из `GET /training/types_activity`.
 Иконки кэшируются в `filesDir/activity_icons/{id}.png` через `IconCacheManager`.
@@ -592,6 +605,19 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
 
 > Задачи для бэкенда — в **BACK_REQ.md** (BR-1…BR-13). Здесь — только
 > Android-часть, которая разблокируется после выполнения BR-задачи.
+
+- **ВРЕМЕННО: debug-сборка на локальном API** (июль 2026) — `BASE_URL` debug =
+  gradle-property `LOCAL_API_URL`, дефолт `http://10.0.2.2:8000/` (эмулятор).
+  Для физического устройства property прописана в
+  `%USERPROFILE%\.gradle\gradle.properties` (`LOCAL_API_URL=http://192.168.0.105:8000/`,
+  LAN-IP машины) — её подхватывает и Android Studio Run, и консольный gradlew;
+  `-P`-флаг не нужен. ⚠️ Run из студии БЕЗ этой property молча зашьёт 10.0.2.2 —
+  телефон будет получать SocketTimeout. Cleartext-разрешение — в
+  `app/src/debug/res/xml/network_security_config.xml` (перекрывает main-версию
+  целиком; при смене LAN-IP обновить и его, и property). Тайловый сервер карты
+  не затронут. **Откат:** вернуть prod-URL в debug-блоке `app/build.gradle.kts`,
+  удалить debug-оверлей network_security_config и строку `LOCAL_API_URL` из
+  глобального gradle.properties. Release всегда на prod.
 
 - **После BR-5 (gps_track с `recorded_at`)** — обновить
   `GetTrainingDetailResponseDto`: убрать `JsonElement?`, вернуть

@@ -64,7 +64,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.smarttracker.data.system.BatteryOptimizationHelper
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -167,8 +170,25 @@ fun WorkoutStartScreen(
         batteryOptimized = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(ctx)
     }
 
+    // ── Статус разрешения геолокации (для карты) ─────────────────────────────
+    // MapViewComposable не должен активировать LocationComponent без разрешения:
+    // на свежей установке это роняет процесс SecurityException-ом изнутри MapLibre.
+    // Начальное значение — фактический статус (при повторных открытиях разрешение
+    // обычно уже есть), true приходит из onLocationGranted когда юзер согласится.
+    var locationPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    ctx, Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
     // Запрашиваем разрешения при открытии экрана.
     LocationPermissionHandler(
+        onLocationGranted   = { locationPermissionGranted = true },
         onPermissionsResult = { /* обработка в сервисе */ },
         onBatteryOptResult  = { granted -> batteryOptimized = granted },
     )
@@ -402,6 +422,9 @@ fun WorkoutStartScreen(
                 isGpsActive = state.isGpsActive,
                 mapTilesFailed = state.mapTilesFailed,
                 onMapTilesFailed = onMapTilesFailed,
+                // Без разрешения LocationComponent не активируется (краш на свежей
+                // установке); после выдачи разрешения активируется на лету.
+                locationPermissionGranted = locationPermissionGranted,
                 // Триггер для one-shot fit-to-bounds: при появлении снимка итогов
                 // карта анимированно подгоняется под весь маршрут. Когда оверлей
                 // закрывается (summary становится null), fit не повторяется.
