@@ -1,6 +1,8 @@
 package com.example.smarttracker.presentation.workout.map
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -91,6 +94,12 @@ import org.maplibre.geojson.Point
  *   GPS-позиции и связанные с ней аниматоры). false — карта статична, LocationComponent не
  *   активируется. Используем false на экранах просмотра завершённой тренировки, где синяя
  *   точка не нужна и её аниматоры приводили к крашам при навигации.
+ * @param locationPermissionGranted true — разрешение геолокации (Fine или Coarse) выдано.
+ *   Пока false, LocationComponent НЕ активируется даже при [enableLocationDot] = true:
+ *   активированный без разрешения компонент роняет процесс SecurityException-ом изнутри
+ *   MapLibre (MapView.onStart → LocationComponent.onStart → getLastKnownLocation), и снаружи
+ *   этот путь не перехватывается. Смена false → true (юзер дал разрешение в диалоге)
+ *   активирует компонент поздно — в update-блоке, без пересоздания карты.
  * @param fitToTrackBoundsKey one-shot триггер «подогнать камеру под bounds трека». Каждый
  *   раз когда значение ключа меняется на не-null, камера однократно анимируется на
  *   `LatLngBounds` всех текущих `trackPoints` с padding. Применяется при открытии оверлея
@@ -110,6 +119,7 @@ fun MapViewComposable(
     mapTilesFailed: Boolean,
     onMapTilesFailed: () -> Unit,
     enableLocationDot: Boolean = true,
+    locationPermissionGranted: Boolean = true,
     fitToTrackBoundsKey: Any? = null,
     scrubPoint: com.example.smarttracker.domain.model.LocationPoint? = null,
     // Drawable-ресурс иконки активности для маркера старта; null — маркер не показывается.
@@ -177,6 +187,10 @@ fun MapViewComposable(
     // он бы зафиксировал начальный null и не видел последующих обновлений.
     val latestFitToTrackBoundsKey  = rememberUpdatedState(fitToTrackBoundsKey)
     val latestTrackPoints          = rememberUpdatedState(trackPoints)
+    // Разрешение может быть выдано ПОСЛЕ загрузки style (свежая установка:
+    // диалог разрешения и загрузка карты идут параллельно) — замыкания должны
+    // видеть актуальное значение.
+    val latestLocationPermission   = rememberUpdatedState(locationPermissionGranted)
 
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -201,7 +215,10 @@ fun MapViewComposable(
                     // Проверяем latestFitToTrackBoundsKey: если != null — карта в summary-
                     // режиме, GPS-точку не показываем (иначе синяя точка появляется поверх
                     // замороженного трека при возврате из фона).
-                    if (enableLocationDot) {
+                    // latestLocationPermission: без разрешения компонент не активирован —
+                    // enable бросил бы IllegalStateException (runCatching скроет, но
+                    // и делать нечего).
+                    if (enableLocationDot && latestLocationPermission.value) {
                         runCatching {
                             state.mapLibreMap?.locationComponent?.isLocationComponentEnabled =
                                 (latestFitToTrackBoundsKey.value == null)
@@ -445,7 +462,10 @@ fun MapViewComposable(
                         // На экранах статичного просмотра (Summary/Map) пропускаем —
                         // живая точка не нужна, а её аниматоры (bearing/accuracy)
                         // продолжают тикать после ON_STOP и крашат карту.
-                        if (enableLocationDot) {
+                        // Без разрешения активацию пропускаем (иначе краш изнутри
+                        // MapLibre, см. KDoc locationPermissionGranted). Если юзер
+                        // выдаст разрешение позже — поздняя активация в update-блоке.
+                        if (enableLocationDot && latestLocationPermission.value) {
                             activateLocationComponent(map, style, context)
                             // В summary-режиме (fitToTrackBoundsKey уже не null) скрываем
                             // живую точку сразу — update ещё не успел это сделать, пока
@@ -596,12 +616,24 @@ fun MapViewComposable(
                     map.uiSettings.setAttributionMargins(attrMargin, attrMargin, 0, 0)
                 }
 
+                // ── Поздняя активация LocationComponent ───────────────────────────
+                // Свежая установка: style загрузился ДО выдачи разрешения → активация
+                // в setStyle-callback была пропущена. Юзер дал разрешение в диалоге →
+                // recompose с locationPermissionGranted = true → активируем здесь,
+                // не пересоздавая карту.
+                if (enableLocationDot && locationPermissionGranted &&
+                    runCatching { !map.locationComponent.isLocationComponentActivated }
+                        .getOrDefault(false)
+                ) {
+                    activateLocationComponent(map, style, mapView.context)
+                }
+
                 // ── Синяя GPS-точка: скрываем в режиме просмотра итогов ───────────
                 // В summary-mode (fitToTrackBoundsKey != null) LocationComponent
                 // уже активирован (запускается один раз в setStyle), но отображение
                 // точки излишне — пользователь смотрит завершённый трек, а не
                 // текущую позицию.
-                if (enableLocationDot) {
+                if (enableLocationDot && locationPermissionGranted) {
                     runCatching {
                         map.locationComponent.isLocationComponentEnabled = (fitToTrackBoundsKey == null)
                     }
@@ -622,9 +654,12 @@ fun MapViewComposable(
                 // На статичных экранах LocationComponent не активирован — голову трека
                 // не добавляем, иначе обращение к locationComponent.* падает с
                 // IllegalStateException ("not activated").
+                // Без разрешения геолокации компонент тоже не активирован (см.
+                // locationPermissionGranted) — та же причина пропустить.
                 // В режиме оверлея итогов (fitToTrackBoundsKey != null) голову не добавляем:
                 // трек заморожен, а liveHead не входит в bounds → линия выходит за край camera.
-                val liveHead: Point? = if (!enableLocationDot || fitToTrackBoundsKey != null) {
+                val liveHead: Point? = if (!enableLocationDot || !locationPermissionGranted ||
+                    fitToTrackBoundsKey != null) {
                     null
                 } else if (map.locationComponent.cameraMode == CameraMode.TRACKING) {
                     map.cameraPosition.target
@@ -860,6 +895,19 @@ private fun activateLocationComponent(
     style: Style,
     context: android.content.Context,
 ) {
+    // Страховка последнего рубежа: активация без разрешения геолокации роняет
+    // процесс SecurityException-ом изнутри MapLibre (MapView.onStart →
+    // LocationComponent.onStart → LocationManager.getLastKnownLocation) —
+    // вызов идёт из внутреннего Handler-а карты, снаружи не перехватывается.
+    // Вызывающие стороны гейтятся по locationPermissionGranted, но проверка
+    // здесь защищает и любые будущие пути вызова.
+    val permissionGranted =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+    if (!permissionGranted) return
+
     val locationOptions = LocationComponentOptions.builder(context)
         .foregroundDrawable(R.drawable.ic_location_dot)
         // Используем тот же drawable как background — убираем дефолтную тень MapLibre,
