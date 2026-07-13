@@ -48,7 +48,7 @@ API Docs: https://runtastic.gottland.ru/docs
 |---|---|---|
 | **PROJECT.md** | Справочник по коду: каждый файл/класс/функция + нюансы | **Искать здесь ПЕРЕД грепом кода** — секции содержат сигнатуры и подводные камни. Проверить хеш в шапке: отстаёт от HEAD → секции изменённых файлов перепроверить по коду |
 | **CLAUDE.md** | Правила, конфигурация, критические нюансы 1–29 | Загружается автоматически; новые грабли → новый нюанс N+1 |
-| **BACK_REQ.md** | Задачи бэкенда BR-1…BR-14 | Новые требования к бэку — ТОЛЬКО сюда (формат: что/зачем/статус Android/приёмка) |
+| **BACK_REQ.md** | Задачи бэкенда BR-1…BR-16 | Новые требования к бэку — ТОЛЬКО сюда (формат: что/зачем/статус Android/приёмка) |
 | **CONTEXT.md** | ⚠️ Архив (март 2026) | Коду НЕ доверять, ничего не записывать |
 
 **После работы (перед коммитом) — чек:**
@@ -140,6 +140,12 @@ com.example.smarttracker/
 ├── data/
 │   ├── cache/
 │   │   └── RoleGoalCache.kt   (in-memory, stale-while-revalidate, TTL 1ч)
+│   ├── hrm/
+│   │   ├── HrmManager.kt, HrmManagerImpl.kt  (singleton-владелец BLE-соединения,
+│   │   │            бесконечный реконнект, freshBpm — нюанс 35)
+│   │   ├── model/   HrmModels.kt (HrmScanResult, HrmSample, HrmConnectionState)
+│   │   └── sensor/  HeartRateSensor (интерфейс), BleHeartRateSensor,
+│   │                HeartRateSensorFactory, HrmParser (0x2A37)
 │   ├── local/
 │   │   ├── db/
 │   │   │   ├── SmartTrackerDatabase.kt  (Room v8, seeding callback)
@@ -242,6 +248,8 @@ com.example.smarttracker/
 │   │   ├── MenuScreen.kt
 │   │   ├── profile/  ProfileScreen, ProfileViewModel, ProfileUiState,
 │   │   │             ProfileEditScreen, ProfileEditViewModel, ProfileEditUiState
+│   │   ├── sensors/  SensorsScreen, SensorsViewModel, BluetoothPermissionHandler
+│   │   │             (подключение BLE-пульсометра)
 │   │   └── settings/ SettingsScreen, SettingsViewModel, VoiceCueSamplePlayer
 │   └── workout/
 │       ├── WorkoutHomeScreen.kt        (Scaffold + нижний бар)
@@ -494,6 +502,23 @@ com.example.smarttracker/
     Фикс: параметр `locationPermissionGranted` в `MapViewComposable` гейтит
     активацию; поздняя активация в `update`-блоке когда разрешение выдали;
     страховка `checkSelfPermission` внутри `activateLocationComponent`.
+
+35. **BLE-пульсометр (data/hrm) — набор граблей Android Bluetooth:**
+    (1) **GATT error 133** — незакрытый `BluetoothGatt` удерживает слот стека:
+    `close()` ВСЕГДА после `disconnect()` и при любом обрыве; `TRANSPORT_LE`
+    явно (dual-mode датчики без него ловят 133 на Samsung); скан остановить
+    до `connectGatt`; пауза ~1с между ретраями — дать стеку закрыть gatt.
+    (2) **API 33 split** — реализовывать ОБА оверлоада `onCharacteristicChanged`
+    и обе ветки записи CCCD (`writeDescriptor` новый/deprecated), иначе
+    нотификации молча не приходят. (3) **Троттлинг сканов** — 5-й скан за 30с
+    молча возвращает пустоту: один скан на тап + автостоп 30с; реконнект
+    по MAC-адресу скана не требует. (4) **startForeground c connectedDevice**
+    (API 34+) — бит добавлять ТОЛЬКО при выданном BLUETOOTH_CONNECT, иначе
+    `SecurityException`. (5) Соединением владеет @Singleton `HrmManager`
+    (реконнект бесконечный, без лимита — тренировка максимально покрыта
+    пульсом); сервис только `connect`/`freshBpm`/`disconnect`. Протухший
+    сэмпл (>10с) в GPS-точку не пишется. (6) API 26–30: BLE-скану нужны
+    гео-разрешение И включённые службы геопозиции.
 
 ---
 
