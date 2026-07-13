@@ -142,6 +142,7 @@ fun WorkoutStartScreen(
     onCloseSummary: () -> Unit,
     onToggleFullscreenMap: () -> Unit,
     onDeleteHistoryTraining: () -> Unit,
+    onOpenSensors: () -> Unit = {},
 ) {
     // ── Статус Doze whitelist (для баннера) ──────────────────────────────────────
     // batteryOptimized = true → приложение в whitelist → баннер скрыт.
@@ -544,16 +545,18 @@ fun WorkoutStartScreen(
             }
 
             // ── HR-бейдж — под GPS-бейджем, только если пульсометр настроен ────
-            // Чисто статусный (не кликается): зелёный = датчик подключён,
-            // красный = нет. Значение пульса здесь НЕ показывается — оно уже
-            // есть в ряду статистики (StatItem «Пульс»), дублирование на карте
-            // только шумит.
+            // Статусный: зелёный = датчик подключён, красный = нет. Значение
+            // пульса здесь НЕ показывается — оно уже есть в ряду статистики
+            // (StatItem «Пульс»). Тап открывает экран «Датчики» — быстрый путь
+            // к переподключению, когда датчик отвалился прямо на тренировке.
             if (!overlayVisible && state.hrmConfigured) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 48.dp, end = 8.dp)
+                        // clip ПЕРЕД clickable — иначе ripple рисуется на прямоугольнике
                         .clip(RoundedCornerShape(size = 32.dp))
+                        .clickable { onOpenSensors() }
                         .border(
                             width = 1.dp,
                             color = ColorPrimary,

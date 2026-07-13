@@ -42,6 +42,7 @@ fun WorkoutHomeScreen(
     onLogout: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
+    onOpenSensors: () -> Unit = {},
 ) {
     var currentTab by remember { mutableStateOf(WorkoutTab.START) }
 
@@ -85,6 +86,7 @@ fun WorkoutHomeScreen(
                     onCloseSummary = viewModel::onCloseSummaryOverlay,
                     onToggleFullscreenMap = viewModel::onToggleFullscreenMap,
                     onDeleteHistoryTraining = viewModel::onDeleteHistoryTraining,
+                    onOpenSensors = onOpenSensors,
                 )
             }
             WorkoutTab.WORKOUTS -> TrainingHistoryScreen(
