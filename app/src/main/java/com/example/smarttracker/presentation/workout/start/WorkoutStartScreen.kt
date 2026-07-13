@@ -77,7 +77,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -545,10 +544,12 @@ fun WorkoutStartScreen(
             }
 
             // ── HR-бейдж — под GPS-бейджем, только если пульсометр настроен ────
-            // Информационный (не кликается): цвет = состояние соединения,
-            // при подключении показывает живой пульс.
+            // Чисто статусный (не кликается): зелёный = датчик подключён,
+            // красный = нет. Значение пульса здесь НЕ показывается — оно уже
+            // есть в ряду статистики (StatItem «Пульс»), дублирование на карте
+            // только шумит.
             if (!overlayVisible && state.hrmConfigured) {
-                Row(
+                Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 48.dp, end = 8.dp)
@@ -558,13 +559,13 @@ fun WorkoutStartScreen(
                             color = ColorPrimary,
                             shape = RoundedCornerShape(size = 32.dp),
                         )
+                        .width(32.dp)
                         .height(32.dp)
                         .background(
                             color = if (state.hrmConnected) ColorGpsActive else ColorGpsInactive,
                             shape = RoundedCornerShape(size = 32.dp),
-                        )
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        ),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Favorite,
@@ -574,17 +575,8 @@ fun WorkoutStartScreen(
                             stringResource(R.string.hrm_badge_disconnected)
                         },
                         tint = Color.White,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                     )
-                    if (state.hrmConnected) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = state.heartRateDisplay,
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
                 }
             }
 

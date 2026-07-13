@@ -2240,7 +2240,7 @@ Composable-обработчик системных разрешений для G
 - **Blur карты до старта GPS.** `Modifier.blur(8.dp)` применяется когда `!overlayVisible && !state.isGpsActive` на API 31+ (`Build.VERSION_CODES.S`); для более старых версий — тёмный скрим `Color.Black.copy(alpha=0.60f)` (blur недоступен).
 - **BackHandler**: в fullscreen сворачивает карту к обычному оверлею; при развёрнутой панели деталей — сворачивает панель; иначе закрывает оверлей целиком.
 - **GPS-бейдж** кликабелен — инкрементирует `recenterTick` (передаётся в `MapViewComposable.recenterTrigger`), цвет фона зависит от `state.isGpsActive` (`ColorGpsActive`/`ColorGpsInactive`).
-- **HR-бейдж** — под GPS-бейджем (top-end карты, `padding(top = 48.dp)`), виден только при `hrmConfigured` и вне оверлея; информационный (не кликается): иконка `Icons.Filled.Favorite` + живой BPM при подключении, фон `ColorGpsActive`/`ColorGpsInactive` по `hrmConnected`.
+- **HR-бейдж** — под GPS-бейджем (top-end карты, `padding(top = 48.dp)`), виден только при `hrmConfigured` и вне оверлея; чисто статусный (не кликается): круглый 32dp, иконка `Icons.Filled.Favorite`, фон `ColorGpsActive`/`ColorGpsInactive` по `hrmConnected`. Значение пульса на бейдже НЕ показывается — оно в StatItem «Пульс» (дублирование на карте шумит).
 
 #### `presentation/workout/start/WorkoutStartViewModel.kt`
 Центральный `@HiltViewModel` экрана тренировки: управляет жизненным циклом `LocationTrackingService`, таймером, инкрементальным расчётом статистики (дистанция/темп/калории), состоянием GPS, оффлайн-очередями сохранения и построением снимка итогов тренировки.
