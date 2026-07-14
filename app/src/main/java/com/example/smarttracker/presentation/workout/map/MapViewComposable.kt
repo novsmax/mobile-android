@@ -198,6 +198,9 @@ fun MapViewComposable(
     // диалог разрешения и загрузка карты идут параллельно) — замыкания должны
     // видеть актуальное значение.
     val latestLocationPermission   = rememberUpdatedState(locationPermissionGranted)
+    // Гашение перед навигацией должно быть видно и в ON_START-замыкании —
+    // иначе рестарт lifecycle мид-навигации перевключит компонент.
+    val latestSuppressLocationDot  = rememberUpdatedState(suppressLocationDot)
 
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -228,7 +231,8 @@ fun MapViewComposable(
                     if (enableLocationDot && latestLocationPermission.value) {
                         runCatching {
                             state.mapLibreMap?.locationComponent?.isLocationComponentEnabled =
-                                (latestFitToTrackBoundsKey.value == null)
+                                (latestFitToTrackBoundsKey.value == null &&
+                                    !latestSuppressLocationDot.value)
                         }
                     }
                 }
@@ -654,9 +658,14 @@ fun MapViewComposable(
                 // уже активирован (запускается один раз в setStyle), но отображение
                 // точки излишне — пользователь смотрит завершённый трек, а не
                 // текущую позицию.
+                // !suppressLocationDot ОБЯЗАТЕЛЕН: update-блок выполняется на каждой
+                // рекомпозиции — без учёта флага он перевключал бы компонент сразу
+                // после гашения перед навигацией, и аниматоры доживали до разрушения
+                // карты (краш из нюанса 36).
                 if (enableLocationDot && locationPermissionGranted) {
                     runCatching {
-                        map.locationComponent.isLocationComponentEnabled = (fitToTrackBoundsKey == null)
+                        map.locationComponent.isLocationComponentEnabled =
+                            (fitToTrackBoundsKey == null && !suppressLocationDot)
                     }
                 }
 

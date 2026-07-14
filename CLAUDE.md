@@ -532,6 +532,12 @@ com.example.smarttracker/
     два `withFrameNanos`, потом navigate (см. `sensorsNavPending`
     в WorkoutStartScreen, тап по HR-бейджу). Вкладки Menu→Settings
     не задевает: там карта уже вне композиции.
+    ⚠️ Вторая грабля: update-блок AndroidView на КАЖДОЙ рекомпозиции
+    выставляет `isLocationComponentEnabled = (fitToTrackBoundsKey == null)`
+    — одноразовое гашение он молча перевключает, аниматоры доживают до
+    разрушения карты, краш остаётся. Любой флаг гашения ОБЯЗАН
+    участвовать и в этом условии update-блока, и в ON_START-ветке
+    lifecycle-observer'а (через rememberUpdatedState).
 
 ---
 
