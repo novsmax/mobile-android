@@ -528,16 +528,22 @@ com.example.smarttracker/
     a newer style is loading")` из Choreographer — внешний try/catch
     бессилен (родня нюанса 34). Паттерн фикса: параметр
     `suppressLocationDot` в `MapViewComposable` (NONE → disable →
-    cancelTransitions, как в ON_STOP) + отложенная навигация — флаг,
-    два `withFrameNanos`, потом navigate (см. `sensorsNavPending`
-    в WorkoutStartScreen, тап по HR-бейджу). Вкладки Menu→Settings
-    не задевает: там карта уже вне композиции.
+    cancelTransitions, как в ON_STOP) + отложенная навигация —
+    `delay(HRM_NAV_DELAY_MS = 350 мс)`, потом navigate
+    (см. `sensorsNavPending` в WorkoutStartScreen, тап по HR-бейджу).
+    Вкладки Menu→Settings не задевает: там карта уже вне композиции.
     ⚠️ Вторая грабля: update-блок AndroidView на КАЖДОЙ рекомпозиции
     выставляет `isLocationComponentEnabled = (fitToTrackBoundsKey == null)`
     — одноразовое гашение он молча перевключает, аниматоры доживают до
     разрушения карты, краш остаётся. Любой флаг гашения ОБЯЗАН
     участвовать и в этом условии update-блока, и в ON_START-ветке
     lifecycle-observer'а (через rememberUpdatedState).
+    ⚠️ Третья грабля: гашение отрезает только подачу НОВЫХ анимаций.
+    Уже запущенный accuracy-AnimatorSet НЕОТМЕНЯЕМ: MapLibre
+    cancelAllAnimations() отменяет детей, а cancel() ребёнка
+    работающего AnimatorSet на API 26+ — документированный no-op;
+    анимация (~250 мс) дотикивает сама. Поэтому пауза перед navigate
+    обязана быть > 250 мс (350 с запасом) — пара кадров НЕ спасает.
 
 ---
 

@@ -60,7 +60,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.delay
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
@@ -110,6 +110,14 @@ import com.example.smarttracker.presentation.workout.summary.TrainingProgressBar
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryUiState
 import kotlin.math.roundToInt
+
+/**
+ * Задержка навигации на «Датчики» после гашения LocationComponent (нюанс 36).
+ * Уже запущенный accuracy-AnimatorSet MapLibre неотменяем (cancel() ребёнка
+ * работающего AnimatorSet — no-op с API 26), длительность анимации ~250 мс —
+ * ждём с запасом, чтобы разрушение карты не попало в её хвост.
+ */
+private const val HRM_NAV_DELAY_MS = 350L
 
 /**
  * Экран начала / активной / завершённой тренировки.
@@ -267,14 +275,16 @@ fun WorkoutStartScreen(
     // Немедленный navigate() с живой карты гонится с аниматорами
     // LocationComponent (accuracy radius/bearing): тик аниматора после
     // инвалидации Style роняет процесс IllegalStateException-ом изнутри
-    // MapLibre (Choreographer — внешний try/catch бессилен, нюанс 34/33).
-    // Порядок: флаг suppressLocationDot гасит компонент в MapViewComposable →
-    // два кадра на завершение отмены аниматоров → навигация.
+    // MapLibre (Choreographer — внешний try/catch бессилен, нюанс 36).
+    // Порядок: флаг suppressLocationDot гасит компонент в MapViewComposable
+    // (отрезает подачу НОВЫХ анимаций), затем ждём HRM_NAV_DELAY_MS — уже
+    // ЗАПУЩЕННЫЙ accuracy-AnimatorSet отменить нельзя (cancel() ребёнка
+    // работающего AnimatorSet на API 26+ — no-op), он дотикивает сам
+    // (~250 мс). К моменту разрушения карты живых аниматоров нет.
     var sensorsNavPending by remember { mutableStateOf(false) }
     LaunchedEffect(sensorsNavPending) {
         if (!sensorsNavPending) return@LaunchedEffect
-        withFrameNanos {}
-        withFrameNanos {}
+        delay(HRM_NAV_DELAY_MS)
         onOpenSensors()
     }
 
