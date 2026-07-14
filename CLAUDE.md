@@ -248,7 +248,8 @@ com.example.smarttracker/
 │   │   ├── MenuScreen.kt
 │   │   ├── profile/  ProfileScreen, ProfileViewModel, ProfileUiState,
 │   │   │             ProfileEditScreen, ProfileEditViewModel, ProfileEditUiState
-│   │   ├── sensors/  SensorsScreen, SensorsViewModel, BluetoothPermissionHandler
+│   │   ├── sensors/  SensorsScreen (+SensorsScreenContent), SensorsOverlay,
+│   │   │             SensorsViewModel, BluetoothPermissionHandler
 │   │   │             (подключение BLE-пульсометра)
 │   │   └── settings/ SettingsScreen, SettingsViewModel, VoiceCueSamplePlayer
 │   └── workout/
@@ -520,30 +521,28 @@ com.example.smarttracker/
     сэмпл (>10с) в GPS-точку не пишется. (6) API 26–30: BLE-скану нужны
     гео-разрешение И включённые службы геопозиции.
 
-36. **Навигация с живой карты — гасить LocationComponent ДО navigate()** —
-    немедленный `navController.navigate(...)` с экрана с активной картой
-    (LocationComponent включён, идут GPS-фиксы) гонится с аниматорами
-    локации (accuracy radius/bearing): тик аниматора после инвалидации
+36. **С экрана с живой картой НЕ навигировать — только оверлеи** —
+    `navController.navigate(...)` с экрана с активной картой
+    (LocationComponent включён, идут GPS-фиксы) разрушает MapView, и
+    тик аниматора локации (accuracy radius/bearing) после инвалидации
     Style роняет процесс `IllegalStateException("Calling getSourceAs when
     a newer style is loading")` из Choreographer — внешний try/catch
-    бессилен (родня нюанса 34). Паттерн фикса: параметр
-    `suppressLocationDot` в `MapViewComposable` (NONE → disable →
-    cancelTransitions, как в ON_STOP) + отложенная навигация —
-    `delay(HRM_NAV_DELAY_MS = 350 мс)`, потом navigate
-    (см. `sensorsNavPending` в WorkoutStartScreen, тап по HR-бейджу).
-    Вкладки Menu→Settings не задевает: там карта уже вне композиции.
-    ⚠️ Вторая грабля: update-блок AndroidView на КАЖДОЙ рекомпозиции
-    выставляет `isLocationComponentEnabled = (fitToTrackBoundsKey == null)`
-    — одноразовое гашение он молча перевключает, аниматоры доживают до
-    разрушения карты, краш остаётся. Любой флаг гашения ОБЯЗАН
-    участвовать и в этом условии update-блока, и в ON_START-ветке
-    lifecycle-observer'а (через rememberUpdatedState).
-    ⚠️ Третья грабля: гашение отрезает только подачу НОВЫХ анимаций.
-    Уже запущенный accuracy-AnimatorSet НЕОТМЕНЯЕМ: MapLibre
-    cancelAllAnimations() отменяет детей, а cancel() ребёнка
-    работающего AnimatorSet на API 26+ — документированный no-op;
-    анимация (~250 мс) дотикивает сама. Поэтому пауза перед navigate
-    обязана быть > 250 мс (350 с запасом) — пара кадров НЕ спасает.
+    бессилен (родня нюанса 34). **Тайминговые митигации НЕ работают —
+    проверено тремя итерациями на устройстве:** (1) гашение компонента
+    (NONE → disable → cancelTransitions) + пара кадров; (2) + гейт
+    update-блока и ON_START (update-блок на каждой рекомпозиции
+    перевключает `isLocationComponentEnabled` — одноразовое гашение
+    молча отменяется); (3) + delay 350 мс (уже запущенный
+    accuracy-AnimatorSet неотменяем: cancel() ребёнка работающего
+    AnimatorSet на API 26+ — no-op, анимация дотикивает сама) — краш
+    воспроизводился после каждой. Единственное надёжное решение —
+    не разрушать карту: UI поверх экрана оверлеем в той же композиции.
+    Примеры: SummaryOverlay (итоги), SensorsOverlay (датчики с
+    HR-бейджа, хостится в WorkoutHomeScreen поверх WorkoutStartScreen).
+    Вкладки Menu→Settings навигируют безопасно: там карта уже вне
+    композиции. Параметр `suppressLocationDot` в MapViewComposable
+    оставлен как страховка (гасит компонент по флагу), но сам по себе
+    краш НЕ предотвращает.
 
 ---
 

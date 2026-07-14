@@ -41,9 +41,9 @@ import com.example.smarttracker.presentation.theme.geologicaFontFamily
  * Экран «Датчики» (Меню → Настройки → Датчики): подключение BLE-пульсометра.
  *
  * Скелет — как [SettingsScreen]: Scaffold + CenterAlignedTopAppBar + нижний
- * бар с вкладкой «Меню». Содержимое: карточка сохранённого датчика
- * (статус, живой пульс, «Подключить»/«Забыть»), кнопка поиска и список
- * найденных устройств (сортировка по силе сигнала).
+ * бар с вкладкой «Меню». Содержимое вынесено в [SensorsScreenContent] —
+ * оно же используется оверлеем [SensorsOverlay] с экрана тренировки
+ * (тап по HR-бейджу; навигация оттуда запрещена — нюанс 36).
  *
  * Разрешения Bluetooth запрашиваются при входе ([BluetoothPermissionHandler]);
  * при отказе поиск недоступен, показывается подсказка.
@@ -60,11 +60,6 @@ fun SensorsScreen(
     onConnectSavedClick: () -> Unit,
     onForgetClick: () -> Unit,
 ) {
-    BluetoothPermissionHandler(
-        onGranted = onPermissionsGranted,
-        onDenied = onPermissionsDenied,
-    )
-
     Scaffold(
         bottomBar = {
             SmartTrackerBottomBar(
@@ -90,55 +85,90 @@ fun SensorsScreen(
         },
         containerColor = Color.White,
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-            SectionTitle(stringResource(R.string.sensors_section_hrm))
+        SensorsScreenContent(
+            state = state,
+            onPermissionsGranted = onPermissionsGranted,
+            onPermissionsDenied = onPermissionsDenied,
+            onScanClick = onScanClick,
+            onDeviceClick = onDeviceClick,
+            onConnectSavedClick = onConnectSavedClick,
+            onForgetClick = onForgetClick,
+            modifier = Modifier.padding(innerPadding),
+        )
+    }
+}
 
-            if (state.savedDeviceAddress != null) {
-                SavedDeviceCard(
-                    state = state,
-                    onConnectClick = onConnectSavedClick,
-                    onForgetClick = onForgetClick,
-                )
-            } else {
-                HintText(stringResource(R.string.sensors_no_saved_device))
-            }
+/**
+ * Содержимое экрана «Датчики» без Scaffold-обвязки: запрос разрешений,
+ * карточка сохранённого датчика, кнопка поиска, список найденных устройств.
+ *
+ * Используется двумя хостами:
+ *  - [SensorsScreen] — полноценный экран из Настроек (Scaffold + бары);
+ *  - [SensorsOverlay] — оверлей поверх экрана тренировки (без навигации).
+ */
+@Composable
+fun SensorsScreenContent(
+    state: SensorsUiState,
+    onPermissionsGranted: () -> Unit,
+    onPermissionsDenied: () -> Unit,
+    onScanClick: () -> Unit,
+    onDeviceClick: (HrmScanResult) -> Unit,
+    onConnectSavedClick: () -> Unit,
+    onForgetClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BluetoothPermissionHandler(
+        onGranted = onPermissionsGranted,
+        onDenied = onPermissionsDenied,
+    )
 
-            Spacer(modifier = Modifier.height(20.dp))
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+    ) {
+        Spacer(modifier = Modifier.height(8.dp))
+        SectionTitle(stringResource(R.string.sensors_section_hrm))
 
-            PrimaryButton(
-                text = if (state.isScanning) {
-                    stringResource(R.string.sensors_scanning)
-                } else {
-                    stringResource(R.string.sensors_scan)
-                },
-                onClick = onScanClick,
-                isEnabled = state.permissionsGranted && !state.isScanning,
-                isLoading = state.isScanning,
+        if (state.savedDeviceAddress != null) {
+            SavedDeviceCard(
+                state = state,
+                onConnectClick = onConnectSavedClick,
+                onForgetClick = onForgetClick,
             )
-
-            if (!state.permissionsGranted) {
-                Spacer(modifier = Modifier.height(8.dp))
-                HintText(stringResource(R.string.sensors_permission_denied))
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            state.scanResults.forEach { device ->
-                ScanResultRow(device = device, onClick = { onDeviceClick(device) })
-            }
-            if (state.hasScanned && !state.isScanning && state.scanResults.isEmpty()) {
-                HintText(stringResource(R.string.sensors_empty_hint))
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+        } else {
+            HintText(stringResource(R.string.sensors_no_saved_device))
         }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        PrimaryButton(
+            text = if (state.isScanning) {
+                stringResource(R.string.sensors_scanning)
+            } else {
+                stringResource(R.string.sensors_scan)
+            },
+            onClick = onScanClick,
+            isEnabled = state.permissionsGranted && !state.isScanning,
+            isLoading = state.isScanning,
+        )
+
+        if (!state.permissionsGranted) {
+            Spacer(modifier = Modifier.height(8.dp))
+            HintText(stringResource(R.string.sensors_permission_denied))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        state.scanResults.forEach { device ->
+            ScanResultRow(device = device, onClick = { onDeviceClick(device) })
+        }
+        if (state.hasScanned && !state.isScanning && state.scanResults.isEmpty()) {
+            HintText(stringResource(R.string.sensors_empty_hint))
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 

@@ -175,6 +175,17 @@ class SensorsViewModel @Inject constructor(
         hrmManager.connect(address)
     }
 
+    /**
+     * Явная остановка скана — для закрытия оверлея «Датчики».
+     * VM скоупится на backstack-entry Home и переживает закрытие оверлея,
+     * onCleared не срабатывает — без явного вызова скан продолжал бы жечь
+     * батарею под экраном тренировки.
+     */
+    fun onScanStopRequested() {
+        scanTimeoutJob?.cancel()
+        hrmManager.stopScan()
+    }
+
     /** «Забыть датчик»: разорвать соединение и стереть из настроек. */
     fun onForgetClick() {
         pendingSave = null

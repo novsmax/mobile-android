@@ -24,6 +24,7 @@ import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyBlocking
 
@@ -122,6 +123,18 @@ class SensorsViewModelTest {
         viewModel.onScanClick()
 
         verify(hrmManager, never()).startScan()
+    }
+
+    @Test
+    fun `onScanStopRequested останавливает скан и отменяет таймаут`() = runTest {
+        viewModel.onScanClick()
+
+        viewModel.onScanStopRequested()
+        verify(hrmManager).stopScan()
+
+        // Таймаут-джоба отменена — второго stopScan по истечении таймаута нет
+        advanceTimeBy(SensorsViewModel.SCAN_TIMEOUT_MS + 1)
+        verify(hrmManager, times(1)).stopScan()
     }
 
     @Test

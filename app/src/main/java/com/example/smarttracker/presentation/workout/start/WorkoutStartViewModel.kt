@@ -1,8 +1,12 @@
 package com.example.smarttracker.presentation.workout.start
 
+import android.Manifest
 import android.util.Log
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smarttracker.data.hrm.HrmManager
@@ -259,7 +263,13 @@ class WorkoutStartViewModel @Inject constructor(
         observeServiceRecordingState()
         // Настройка «не гасить экран»: пробрасывается в UiState, сам флаг окна
         // ставит WorkoutStartScreen (view.keepScreenOn) только при isTracking.
-        // Здесь же — наличие настроенного пульсометра (гейт HR-элементов UI).
+        // Здесь же — наличие настроенного пульсометра (гейт HR-элементов UI)
+        // и его автоподключение: сохранённый датчик подключается сразу при
+        // входе на экран, не дожидаясь старта тренировки. connect идемпотентен
+        // (тот же адрес + CONNECTED = no-op) — повторные эмиссии настроек
+        // безопасны, а смена датчика в Настройках даёт реконнект на новый
+        // адрес. Без разрешения BLUETOOTH_CONNECT — молча скип (запрос
+        // разрешения живёт на экране «Датчики»).
         viewModelScope.launch {
             settingsStorage.settings.collect { s ->
                 _state.update {
@@ -267,6 +277,9 @@ class WorkoutStartViewModel @Inject constructor(
                         keepScreenOn = s.keepScreenOn,
                         hrmConfigured = s.hrmDeviceAddress != null,
                     )
+                }
+                if (s.hrmDeviceAddress != null && hasBluetoothConnectPermission()) {
+                    hrmManager.connect(s.hrmDeviceAddress)
                 }
             }
         }
@@ -1507,6 +1520,20 @@ class WorkoutStartViewModel @Inject constructor(
         val intent = Intent(context, LocationTrackingService::class.java)
         context.stopService(intent)
     }
+
+    /**
+     * API 31+: runtime BLUETOOTH_CONNECT; ниже — legacy BLUETOOTH выдан при
+     * установке. Дублирует хелпер LocationTrackingService — оба потребителя
+     * автоподключения проверяют разрешение сами.
+     */
+    private fun hasBluetoothConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
 
     companion object {
         private const val TAG = "WorkoutStartViewModel"

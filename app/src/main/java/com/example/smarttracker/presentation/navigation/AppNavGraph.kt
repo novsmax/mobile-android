@@ -226,9 +226,6 @@ fun AppNavGraph(
                 onNavigateToSettings = {
                     navController.navigate(Screen.Settings.route)
                 },
-                onOpenSensors = {
-                    navController.navigate(Screen.Sensors.route)
-                },
             )
         }
 

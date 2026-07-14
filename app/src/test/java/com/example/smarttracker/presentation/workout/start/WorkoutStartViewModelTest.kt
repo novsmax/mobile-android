@@ -164,6 +164,7 @@ class WorkoutStartViewModelTest {
     // после создания ViewModel (мок HrmManager отдаёт их как StateFlow).
     private val hrmConnectionState = MutableStateFlow(HrmConnectionState.DISCONNECTED)
     private val hrmSample = MutableStateFlow<HrmSample?>(null)
+    private lateinit var hrmManager: HrmManager
 
     private fun createViewModel(
         types: List<WorkoutType> = listOf(runningType),
@@ -186,7 +187,7 @@ class WorkoutStartViewModelTest {
         }
         hrmConnectionState.value = HrmConnectionState.DISCONNECTED
         hrmSample.value = null
-        val hrmManager: HrmManager = mock {
+        hrmManager = mock {
             on { connectionState } doReturn hrmConnectionState
             on { currentSample } doReturn hrmSample
         }
@@ -420,6 +421,21 @@ class WorkoutStartViewModelTest {
     fun `hrmConfigured false без сохранённого датчика`() = runVmTest {
         val vm = createViewModel()
         assertFalse("Без адреса → hrmConfigured=false", vm.state.value.hrmConfigured)
+    }
+
+    @Test
+    fun `сохранённый датчик автоподключается при входе на экран`() = runVmTest {
+        // Robolectric sdk=28 → ветка «ниже S»: legacy BLUETOOTH выдан при установке
+        createViewModel(
+            settings = AppSettings(hrmDeviceAddress = "AA:BB:CC:DD:EE:FF", hrmDeviceName = "Polar H10"),
+        )
+        verify(hrmManager).connect("AA:BB:CC:DD:EE:FF")
+    }
+
+    @Test
+    fun `без сохранённого датчика автоподключения нет`() = runVmTest {
+        createViewModel()
+        verify(hrmManager, never()).connect(any())
     }
 
     @Test

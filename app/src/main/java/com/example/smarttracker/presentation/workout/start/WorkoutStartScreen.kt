@@ -60,7 +60,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
@@ -110,14 +109,6 @@ import com.example.smarttracker.presentation.workout.summary.TrainingProgressBar
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryFormatters
 import com.example.smarttracker.presentation.workout.summary.WorkoutSummaryUiState
 import kotlin.math.roundToInt
-
-/**
- * Задержка навигации на «Датчики» после гашения LocationComponent (нюанс 36).
- * Уже запущенный accuracy-AnimatorSet MapLibre неотменяем (cancel() ребёнка
- * работающего AnimatorSet — no-op с API 26), длительность анимации ~250 мс —
- * ждём с запасом, чтобы разрушение карты не попало в её хвост.
- */
-private const val HRM_NAV_DELAY_MS = 350L
 
 /**
  * Экран начала / активной / завершённой тренировки.
@@ -270,23 +261,6 @@ fun WorkoutStartScreen(
     } else null
 
     val scrubPoint = scrubIndex?.let { summary?.trackPoints?.getOrNull(it) }
-
-    // ── Отложенная навигация на экран «Датчики» (тап по HR-бейджу) ──────────
-    // Немедленный navigate() с живой карты гонится с аниматорами
-    // LocationComponent (accuracy radius/bearing): тик аниматора после
-    // инвалидации Style роняет процесс IllegalStateException-ом изнутри
-    // MapLibre (Choreographer — внешний try/catch бессилен, нюанс 36).
-    // Порядок: флаг suppressLocationDot гасит компонент в MapViewComposable
-    // (отрезает подачу НОВЫХ анимаций), затем ждём HRM_NAV_DELAY_MS — уже
-    // ЗАПУЩЕННЫЙ accuracy-AnimatorSet отменить нельзя (cancel() ребёнка
-    // работающего AnimatorSet на API 26+ — no-op), он дотикивает сам
-    // (~250 мс). К моменту разрушения карты живых аниматоров нет.
-    var sensorsNavPending by remember { mutableStateOf(false) }
-    LaunchedEffect(sensorsNavPending) {
-        if (!sensorsNavPending) return@LaunchedEffect
-        delay(HRM_NAV_DELAY_MS)
-        onOpenSensors()
-    }
 
     // ── Панель деталей (сплиты/график) ──────────────────────────────────────
     // Разворачивается чевроном на StatsRow и рисуется поверх зоны карты —
@@ -464,9 +438,6 @@ fun WorkoutStartScreen(
                 // Без разрешения LocationComponent не активируется (краш на свежей
                 // установке); после выдачи разрешения активируется на лету.
                 locationPermissionGranted = locationPermissionGranted,
-                // Гашение LocationComponent перед навигацией на экран «Датчики»
-                // (см. sensorsNavPending выше — иначе гонка аниматоров со Style).
-                suppressLocationDot = sensorsNavPending,
                 // Триггер для one-shot fit-to-bounds: при появлении снимка итогов
                 // карта анимированно подгоняется под весь маршрут. Когда оверлей
                 // закрывается (summary становится null), fit не повторяется.
@@ -577,8 +548,9 @@ fun WorkoutStartScreen(
             // ── HR-бейдж — под GPS-бейджем, только если пульсометр настроен ────
             // Статусный: зелёный = датчик подключён, красный = нет. Значение
             // пульса здесь НЕ показывается — оно уже есть в ряду статистики
-            // (StatItem «Пульс»). Тап открывает экран «Датчики» — быстрый путь
-            // к переподключению, когда датчик отвалился прямо на тренировке.
+            // (StatItem «Пульс»). Тап открывает ОВЕРЛЕЙ «Датчики» поверх экрана
+            // (SensorsOverlay в WorkoutHomeScreen) — быстрый путь к
+            // переподключению; навигация с живой карты запрещена (нюанс 36).
             if (!overlayVisible && state.hrmConfigured) {
                 Box(
                     modifier = Modifier
@@ -586,9 +558,7 @@ fun WorkoutStartScreen(
                         .padding(top = 48.dp, end = 8.dp)
                         // clip ПЕРЕД clickable — иначе ripple рисуется на прямоугольнике
                         .clip(RoundedCornerShape(size = 32.dp))
-                        // Навигация отложенная (sensorsNavPending): сначала гасится
-                        // LocationComponent, иначе краш MapLibre — см. блок выше.
-                        .clickable { sensorsNavPending = true }
+                        .clickable { onOpenSensors() }
                         .border(
                             width = 1.dp,
                             color = ColorPrimary,
