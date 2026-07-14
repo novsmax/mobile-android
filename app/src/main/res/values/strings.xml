@@ -80,7 +80,7 @@
     <string name="sensors_title">Датчики</string>
     <string name="sensors_section_hrm">Пульсометр</string>
     <string name="sensors_saved_device">Сохранённый датчик</string>
-    <string name="sensors_scan">Найти</string>
+    <string name="sensors_scan">Поиск</string>
     <string name="sensors_scanning">Поиск…</string>
     <string name="sensors_connect">Подключить</string>
     <string name="sensors_forget">Забыть датчик</string>
