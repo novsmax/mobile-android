@@ -43,3 +43,8 @@ captures/
 # Virtual machine crash logs
 hs_err_pid*
 replay_pid*
+
+# Временные git-worktree (Claude Code) — рабочие копии, не трекать.
+# Раньше содержимое одного worktree случайно закоммитили (12 файлов-дубликатов
+# исходников под gracious-chatelet-154ad5) — этот игнор предотвращает повтор.
+.claude/worktrees/
