@@ -273,7 +273,7 @@ private fun StatsRow(
             StatCard(
                 iconRes = R.drawable.ic_time,
                 value = state.durationDisplay,
-                label = "Продолжительность",
+                label = "Время",
                 modifier = Modifier.weight(1f),
             )
             StatCard(
