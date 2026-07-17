@@ -34,7 +34,8 @@ API Docs: https://runtastic.gottland.ru/docs
   ✅ AppMetrica-крашрепортинг (wiring; ключ задаёт владелец).
   Осталось: реквизиты оператора ПДн + юр-проверка текстов (плейсхолдеры
   в LegalScreens.kt), хостинг политики (BR-15), регистрация приложения
-  в кабинете AppMetrica + ключ, убрать debug_code на бэке (BR-1),
+  в кабинете AppMetrica + ключ, поднять прод + приёмка BR-1/BR-7 на проде
+  (в коде бэка закрыты, прод отдавал 502 при ревизии 17.07.2026 — BR-13),
   ревизия публичности CONTEXT.md, smoke-test release-APK на устройстве
   (логин → тренировка → финиш → история).
 
@@ -352,8 +353,10 @@ com.example.smarttracker/
 6. **`RESEND_COOLDOWN_SECONDS = 120`** — при 400 от `/auth/resend-code` тело содержит
    `"Please wait N seconds"`. UI — таймер 120 секунд.
 
-7. **`debug_code`** — `/auth/register` возвращает код верификации открытым текстом.
-   В `RegisterResultDto` не включать. Убрать до прода.
+7. **`debug_code`** — исторически `/auth/register` возвращал код верификации
+   открытым текстом. ✅ Убран из кода бэка (коммит `d662341`, март 2026);
+   в `RegisterResultDto` не включён. После поднятия прода проверить, что
+   задеплоена версия без него (BACK_REQ: BR-1 в «Выполнено»).
 
 8. **`remaining_seconds` — nullable** — `Optional[int]` на бэкенде → `Int?` в DTO.
 
@@ -579,7 +582,7 @@ com.example.smarttracker/
 ---
 
 ## API эндпоинты (авторизация) — AuthApiService
-- `POST /auth/register` → access_token, refresh_token, expires_in
+- `POST /auth/register` → message, email, expires_in (**токенов НЕТ** — их выдаёт `/auth/verify-email`; DTO: `RegisterResultDto`)
 - `POST /auth/verify-email` → access_token, refresh_token
 - `POST /auth/resend-code` → message, expires_at, remaining_seconds
 - `POST /auth/login` → access_token, refresh_token
@@ -668,12 +671,12 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
   удалить debug-оверлей network_security_config и строку `LOCAL_API_URL` из
   глобального gradle.properties. Release всегда на prod.
 
-- **После BR-5 (gps_track с `recorded_at`)** — обновить
-  `GetTrainingDetailResponseDto`: убрать `JsonElement?`, вернуть
-  `List<GpsTrackPointDto>?`, добавить `recorded_at` в `GpsTrackPointDto`,
-  обновить маппер. Разблокирует elapsed/скорость в scrub-оверлее истории
-  и экспорт GPX. Сплиты и график скорости в оверлее истории включатся
-  автоматически (гейт `SplitsBuilder.hasRealTiming`, нюанс 33).
+- **BR-5 закрыт бэком иначе** (ревизия 17.07.2026) — вместо per-point
+  `recorded_at` сервер отдаёт параллельный массив `gps_points_timestamps`
+  (+ `elevation_gain`); `GetTrainingDetailResponseDto` уже адаптирован
+  (маппер собирает `timestampUtc` с fallback на индекс), сплиты/график
+  в оверлее истории включаются сами (гейт `hasRealTiming`). Остаток:
+  **экспорт GPX** — теперь разблокирован, фича не начата.
 
 - **После BR-4 (`GET /auth/allowed-email-domains`)** — заменить
   `AllowedEmailDomainsRepositoryImpl` на сетевую реализацию с кэшем
