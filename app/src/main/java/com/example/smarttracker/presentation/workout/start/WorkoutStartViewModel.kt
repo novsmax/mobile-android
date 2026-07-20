@@ -1059,8 +1059,11 @@ class WorkoutStartViewModel @Inject constructor(
             // или null от сервера.
             val elevationM = (item.elevationGain ?: calculateElevationGain(points)).toFloat()
             val cumData    = buildCumulativeData(points, emptyList())
-            // Пульс: сервер начнёт отдавать heart_rate в треке после BR-16 —
-            // до этого список пуст и поля остаются null (секция скрыта).
+            // Пульс: приоритет — серверные агрегаты из списка истории (BR-16,
+            // тот же принцип, что elevation выше: доступны даже если трек не
+            // загрузился). Fallback — клиентский расчёт по точкам трека
+            // (тренировки, сохранённые до серверных агрегатов, но с пульсом
+            // в точках). Обе ветки null → секция скрыта.
             val heartRates = points.mapNotNull { it.heartRate }
             val snapshot = WorkoutSummaryUiState(
                 origin           = SummaryOrigin.HISTORY,
@@ -1080,9 +1083,10 @@ class WorkoutStartViewModel @Inject constructor(
                 // метки трека (BR-5) — buildSplits сам гейтит по правдоподобию
                 // elapsed (синтетические timestampUtc = index дают elapsed в мс).
                 splits           = SplitsBuilder.buildSplits(cumData),
-                avgHeartRateDisplay = heartRates.takeIf { it.isNotEmpty() }
-                    ?.let { WorkoutSummaryFormatters.formatHeartRate(it.average().roundToInt()) },
-                maxHeartRateDisplay = heartRates.maxOrNull()
+                avgHeartRateDisplay = (item.avgHeartRate?.roundToInt()
+                    ?: heartRates.takeIf { it.isNotEmpty() }?.average()?.roundToInt())
+                    ?.let { WorkoutSummaryFormatters.formatHeartRate(it) },
+                maxHeartRateDisplay = (item.maxHeartRate ?: heartRates.maxOrNull())
                     ?.let { WorkoutSummaryFormatters.formatHeartRate(it) },
             )
             // Защита от гонки: если оверлей закрыли или уже переключили на другую

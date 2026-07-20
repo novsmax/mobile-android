@@ -500,6 +500,39 @@ class WorkoutStartViewModelTest {
     }
 
     @Test
+    fun `showHistorySummary - серверные агрегаты пульса приоритетнее расчёта по точкам`() = runVmTest {
+        val vm = createViewModel()
+        // Точки дают avg 140 / max 160, но сервер прислал агрегаты 155.4 / 172
+        // (например, часть точек не долетела в трек) — выигрывает сервер.
+        val points = listOf(historyPoint(0, heartRate = 120), historyPoint(1, heartRate = 160))
+        workoutRepository.stub {
+            onBlocking { getTrainingDetail("hist-3") } doReturn Result.success(points)
+        }
+
+        vm.showHistorySummary(historyItem("hist-3", avgHeartRate = 155.4, maxHeartRate = 172), "Бег")
+
+        val overlay = vm.state.value.summaryOverlay
+        assertNotNull(overlay)
+        assertEquals("155 уд/мин", overlay!!.avgHeartRateDisplay)
+        assertEquals("172 уд/мин", overlay.maxHeartRateDisplay)
+    }
+
+    @Test
+    fun `showHistorySummary - агрегаты сервера показываются даже без загруженного трека`() = runVmTest {
+        val vm = createViewModel()
+        workoutRepository.stub {
+            onBlocking { getTrainingDetail("hist-4") } doReturn Result.success(emptyList())
+        }
+
+        vm.showHistorySummary(historyItem("hist-4", avgHeartRate = 148.0, maxHeartRate = 165), "Бег")
+
+        val overlay = vm.state.value.summaryOverlay
+        assertNotNull(overlay)
+        assertEquals("148 уд/мин", overlay!!.avgHeartRateDisplay)
+        assertEquals("165 уд/мин", overlay.maxHeartRateDisplay)
+    }
+
+    @Test
     fun `showHistorySummary без пульса в точках - поля null, секция скрыта`() = runVmTest {
         val vm = createViewModel()
         val points = listOf(historyPoint(0, heartRate = null), historyPoint(1, heartRate = null))
@@ -528,7 +561,11 @@ class WorkoutStartViewModelTest {
             heartRate    = heartRate,
         )
 
-    private fun historyItem(id: String) = com.example.smarttracker.domain.model.TrainingHistoryItem(
+    private fun historyItem(
+        id: String,
+        avgHeartRate: Double? = null,
+        maxHeartRate: Int? = null,
+    ) = com.example.smarttracker.domain.model.TrainingHistoryItem(
         trainingId    = id,
         typeActivId   = 1,
         date          = java.time.LocalDate.of(2026, 7, 10),
@@ -538,6 +575,8 @@ class WorkoutStartViewModelTest {
         distanceM     = 5000.0,
         avgSpeed      = null,
         elevationGain = null,
+        avgHeartRate  = avgHeartRate,
+        maxHeartRate  = maxHeartRate,
     )
 
     // ── Форматтеры (companion) ────────────────────────────────────────────────
