@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-14, коммит `7808394`, ветка `claude/smarttracker-ant-plus-hrm-18d856`.
+по состоянию на 2026-07-20, коммит `c47170f`, ветка `main`.
 
 ---
 
@@ -395,7 +395,7 @@ Domain-модель роли, доступной для выбора на экр
 
 #### `domain/model/TrainingHistoryItem.kt`
 Элемент истории тренировки.
-- `TrainingHistoryItem` (data class) — поля: `trainingId: String`, `typeActivId: Int`, `date: LocalDate`, `timeStart: String?`, `timeEnd: String?`, `kilocalories: Double?`, `distanceM: Double?`, `avgSpeed: Double?`, `elevationGain: Double?`.
+- `TrainingHistoryItem` (data class) — поля: `trainingId: String`, `typeActivId: Int`, `date: LocalDate`, `timeStart: String?`, `timeEnd: String?`, `kilocalories: Double?`, `distanceM: Double?`, `avgSpeed: Double?`, `elevationGain: Double?`, `avgHeartRate: Double? = null`, `maxHeartRate: Int? = null` (агрегаты пульса — сервер считает при save_training, BR-16; null = без датчика или тренировка до BR-16).
 
 Особенности: получается с эндпоинта `GET /training/history`. Для UI из всех временных полей нужна только `date` как `LocalDate`. Большинство полей nullable, отражая опциональность на бэкенде.
 
@@ -1067,14 +1067,15 @@ DTO ответа `POST /password-reset/request`.
 
 #### `data/remote/dto/GetTrainingDetailResponseDto.kt`
 DTO ответа `GET /training/{training_id}/get_training`, самый сложный DTO в проекте по логике маппинга GPS-трека.
-- `GetTrainingDetailResponseDto` (data class): `trainingId: String` (`@SerializedName("training_id")`), `typeActivId: Int` (`@SerializedName("type_activ_id")`), `date: String`, `timeStart: String` (`@SerializedName("time_start")`), `timeEnd: String?` (`@SerializedName("time_end")`), `kilocalories: Double?`, `distanceM: Double?` (`@SerializedName("distance_m")`), `avgSpeed: Double?` (`@SerializedName("avg_speed")`), `elevationGain: Double?` (`@SerializedName("elevation_gain")`), `gpsTrack: JsonElement?` (`@SerializedName("gps_track")`, сырой GeoJSON LineString — используется `JsonElement?`, чтобы Gson не падал на любом формате), `gpsPointsTimestamps: List<String>?` (`@SerializedName("gps_points_timestamps")`, параллельный массив ISO-таймстемпов по индексу).
+- `GetTrainingDetailResponseDto` (data class): `trainingId: String` (`@SerializedName("training_id")`), `typeActivId: Int` (`@SerializedName("type_activ_id")`), `date: String`, `timeStart: String` (`@SerializedName("time_start")`), `timeEnd: String?` (`@SerializedName("time_end")`), `kilocalories: Double?`, `distanceM: Double?` (`@SerializedName("distance_m")`), `avgSpeed: Double?` (`@SerializedName("avg_speed")`), `elevationGain: Double?` (`@SerializedName("elevation_gain")`), `gpsTrack: JsonElement?` (`@SerializedName("gps_track")`, сырой GeoJSON LineString — используется `JsonElement?`, чтобы Gson не падал на любом формате), `gpsPointsTimestamps: List<String>?` (`@SerializedName("gps_points_timestamps")`, параллельный массив ISO-таймстемпов по индексу), `gpsPointsHeartRates: List<Int?>?` (`@SerializedName("gps_points_heart_rates")`, параллельный массив пульса BR-16; null-элемент = датчик не был подключён; массив отсутствует у тренировок до BR-16), `avgHeartRate: Double?` (`@SerializedName("avg_heart_rate")`), `maxHeartRate: Int?` (`@SerializedName("max_heart_rate")`) — серверные агрегаты пульса (в оверлее истории приоритет у значений из `GET /training/history`, см. `showHistorySummary`).
 - `fun GetTrainingDetailResponseDto.gpsPointsToDomain(): List<LocationPoint>` — разбирает `gpsTrack` (`{"type":"LineString","coordinates":[[lon,lat,alt], ...]}`), для каждой точки:
   - координаты в порядке GeoJSON (longitude первым!): `arr[0]` → longitude, `arr[1]` → latitude, `arr[2]` (если есть) → altitude;
   - таймстемп берётся из `gpsPointsTimestamps[index]`, парсится сначала как `OffsetDateTime`, при ошибке — как `LocalDateTime` с явным `ZoneOffset.UTC` (бэк отдаёт два формата: со смещением `...613000Z` и без смещения `...705000`); при полном провале парсинга — fallback `index.toLong()`;
+  - `heartRate` берётся из `gpsPointsHeartRates[index]` через `getOrNull` (страховка от массива короче координат — сервер гарантирует равенство длин, но клиент на расхождении не падает);
   - `speed`/`accuracy` не передаются сервером → всегда `null`.
   - Комментарий явно указывает: корректные `timestampUtc` нужны `WorkoutSummaryViewModel.buildCumulativeData` для расчёта `elapsedMs` — индикатора scrub-оверлея истории.
 
-Особенности: это ровно тот DTO, что упомянут в TODO проекта — планируется замена `gps_track` (GeoJSON без таймстемпов) на массив объектов с `recorded_at`, после чего `JsonElement?` предполагается убрать в пользу типизированного `List<GpsTrackPointDto>?`.
+Особенности: сервер закрыл BR-5/BR-16 параллельными массивами при неизменном GeoJSON `gps_track`, поэтому `JsonElement?` остаётся рабочим форматом (типизированный `List<GpsTrackPointDto>?` из старого TODO не понадобился). Тест: `dto/GetTrainingDetailResponseDtoTest.kt`.
 
 #### `data/remote/dto/GoalResponseDto.kt`
 DTO ответа `GET /goal/` (МОБ-6, цели для Step 2 регистрации).
@@ -1149,7 +1150,7 @@ DTO ответа `GET /role/` (МОБ-6.3, все доступные роли д
 
 #### `data/remote/dto/TrainingHistoryResponseDto.kt`
 DTO элемента истории тренировок (`GET /training/history`).
-- `TrainingHistoryResponseDto` (data class): `trainingId: String` (`@SerializedName("training_id")`), `typeActivId: Int` (`@SerializedName("type_activ_id")`), `date: String`, `timeStart: String?` (`@SerializedName("time_start")`), `timeEnd: String?` (`@SerializedName("time_end")`), `kilocalories: Double?`, `distanceM: Double?` (`@SerializedName("distance_m")`), `avgSpeed: Double?` (`@SerializedName("avg_speed")`), `elevationGain: Double?` (`@SerializedName("elevation_gain")`).
+- `TrainingHistoryResponseDto` (data class): `trainingId: String` (`@SerializedName("training_id")`), `typeActivId: Int` (`@SerializedName("type_activ_id")`), `date: String`, `timeStart: String?` (`@SerializedName("time_start")`), `timeEnd: String?` (`@SerializedName("time_end")`), `kilocalories: Double?`, `distanceM: Double?` (`@SerializedName("distance_m")`), `avgSpeed: Double?` (`@SerializedName("avg_speed")`), `elevationGain: Double?` (`@SerializedName("elevation_gain")`), `avgHeartRate: Double?` (`@SerializedName("avg_heart_rate")`), `maxHeartRate: Int?` (`@SerializedName("max_heart_rate")`) — агрегаты пульса BR-16 (null у тренировок без датчика/до BR-16).
 - `fun TrainingHistoryResponseDto.toDomain(): TrainingHistoryItem` — маппинг 1-в-1, `date` парсится через `LocalDate.parse(date)` (ожидается ISO-8601 `yyyy-MM-dd`; при неверном формате бросит исключение — явного `runCatching` в этом файле нет).
 
 #### `data/remote/dto/TrainingSaveDto.kt`
@@ -1207,6 +1208,14 @@ DTO ответа `POST /password-reset/verify-code`.
 - `` `toIconKey для id=5 (Ходьба) возвращает строку 5` ``
 - `` `imagePath null не вызывает исключений при создании DTO` ``
 - `` `imagePath не-null сохраняется в DTO` ``
+
+#### `dto/GetTrainingDetailResponseDtoTest.kt`
+Покрывает маппер `gpsPointsToDomain()` — параллельные массивы ответа детали тренировки (JSON собирается строкой и парсится реальным Gson, проверяя разом `@SerializedName`-контракт и маппер):
+- `` `heart_rates с null-элементом - пульс привязан к точкам по индексу` ``
+- `` `без массива heart_rates - у всех точек heartRate null` ``
+- `` `массив heart_rates короче координат - хвост точек получает null, разбор не падает` ``
+- `` `агрегаты avg и max пульса парсятся из ответа` ``
+- `` `timestamps парсятся в epoch millis, пульс и время идут по одному индексу` ``
 
 #### `dto/GpsPointDtoTest.kt`
 Покрывает маппер `LocationPoint.toGpsPointDto()`:
@@ -2271,7 +2280,7 @@ Composable-обработчик системных разрешений для G
 - `fun onCloseSummaryOverlay()` — поведение зависит от `origin`: `FINISH` — полный сброс live-состояния + рестарт discovery GPS; `HISTORY` — закрывает только оверлей, не трогая параллельную активную тренировку (плюс отмена `historyDetailJob`).
 - `fun onToggleFullscreenMap()` — переключает `isMapFullscreen`.
 - `fun onDeleteHistoryTraining()` — удаляет тренировку из истории (`DELETE .../delete_completed`), только для `SummaryOrigin.HISTORY`.
-- `fun showHistorySummary(item: TrainingHistoryItem, activityName: String)` — показывает оверлей итогов для тренировки из истории: сразу `isLoading=true`, затем асинхронно тянет GPS-трек через `GET /training/{id}/get_training`; avg/max пульс считается по тем же правилам, что в FINISH (до BR-16 сервер пульс не отдаёт → поля null, секция скрыта).
+- `fun showHistorySummary(item: TrainingHistoryItem, activityName: String)` — показывает оверлей итогов для тренировки из истории: сразу `isLoading=true`, затем асинхронно тянет GPS-трек через `GET /training/{id}/get_training`. Пульс: приоритет — серверные агрегаты `item.avgHeartRate`/`item.maxHeartRate` (BR-16; доступны даже если трек не загрузился — паттерн elevation), fallback — расчёт по `points.mapNotNull { heartRate }` (тренировки с пульсом в точках, но без агрегатов); обе ветки null → поля null, секция скрыта.
 - `private fun calculateElevationGain(points): Double` — суммирует только положительные дельты `altitude` между соседними точками, null-точки пропускаются без разрыва цепочки.
 - `private fun buildCumulativeData(points, pauseGapIndices): CumulativeTrackData` — предвычисляет накопленные дистанцию/высоту/время/скорость на каждую точку для O(1) scrub-lookups; симметрична live-расчёту в `observeTrackingData` (одинаковые gap-индексы пропускаются).
 - `private fun observeTrackingData(trainingId)` — единый наблюдатель GPS-точек: инкрементальный расчёт (обрабатываются только новые пары точек, не полный проход O(n²)) на `Dispatchers.Default`; GPS-таймаут 30 сек без новых точек → `UNAVAILABLE` (тренировка не останавливается).
@@ -2498,6 +2507,10 @@ Composable-обработчик системных разрешений для G
 после таймаута 5 сек ожидания `finishSyncFlow` (`advanceTimeBy`); освобождение `trackPoints`
 при финише (нюанс 21); блокировка смены типа во время тренировки; форматтеры
 `formatPace`/`formatDuration`.
+Пульс в оверлее истории (`showHistorySummary`, BR-16): расчёт avg/max по точкам
+(null-точки не участвуют); серверные агрегаты `item.avgHeartRate`/`maxHeartRate`
+приоритетнее расчёта по точкам; агрегаты показываются даже при пустом треке;
+без пульса вовсе — поля null (секция скрыта).
 Нюанс тестов: scope ViewModel гасится в `tearDown` (`vm.viewModelScope.cancel()`) — таймер
 тренировки (бесконечный `while(isActive){delay(1000)}`) иначе не даёт test-scheduler'у
 стать idle и `runTest` виснет в фазе очистки (не падает по таймауту, а висит).
