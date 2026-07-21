@@ -547,19 +547,24 @@ com.example.smarttracker/
     `suppressLocationDot` в MapViewComposable оставлен как страховка
     (гасит компонент по флагу), но сам по себе краш НЕ предотвращает.
 
-37. **Дистанция и паузы — четыре клиентских расчёта + сервер, все обязаны
-    быть gap-aware** — на паузе сервис точек не пишет, пара (gap−1, gap) —
-    «телепорт». Gap-индексы: сервис (`recordedPointCount` на момент паузы) →
-    recoveryPrefs (`KEY_PAUSE_GAP_INDICES`) + `recordingStateFlow` → VM.
-    Расчёты: (1) сервис — `prevDistancePoint=null` на resume; (2) live
-    `observeTrackingData` — gap-пары пропускаются, их время (`pausedNanos`)
-    вычитается из длительности темпа; (3) `buildCumulativeData` — skip +
-    `totalPausedMs`; (4) история — сервер gap'ы не хранит, эвристика
-    `SplitsBuilder.detectPauseGapIndices` (разрыв > max(15с, 3×медианный
-    интервал)). Сервер (BR-18): присланная `total_distance_meters`
-    приоритетна — `ST_Length` по непрерывному LINESTRING посчитал бы телепорт
-    (и 3D-скачки от null-высот в WKT). Любой новый расчёт статистики обязан
-    пропускать gap-пары.
+37. **Дистанция и паузы — gap-aware через ЕДИНЫЙ `buildCumulativeData`** —
+    на паузе сервис точек не пишет, пара (gap−1, gap) — «телепорт».
+    Gap-индексы: сервис (`recordedPointCount` на момент паузы) → recoveryPrefs
+    (`KEY_PAUSE_GAP_INDICES`) + `recordingStateFlow` → VM `pauseGapIndices`.
+    Расчёты: (1) сервис — своя дистанция для TTS, `prevDistancePoint=null` на
+    resume; (2) **live `observeTrackingData` — ПОЛНЫЙ пересчёт через
+    `buildCumulativeData` на каждой эмиссии** (не инкрементально!); (3) финиш/
+    scrub — тот же `buildCumulativeData`; (4) история — сервер gap'ы не хранит,
+    эвристика `SplitsBuilder.detectPauseGapIndices` (разрыв > max(15с,
+    3×медианный интервал)). **Почему live НЕ инкрементально** (грабли, ловились
+    в поле): инкрементальный аккумулятор не мог ретроактивно вычесть телепорт,
+    если gap-индекс приходил ПОСЛЕ обработки его пост-резюм точки (async-гонка
+    Intent→SharedFlow→state против Room-потока, особенно флаппинг автопаузы) —
+    телепорт впечатывался навсегда; live расходился с scrub. Полный пересчёт
+    самокорректируется: gap на следующей эмиссии уже в state. Сервер (BR-18):
+    присланная `total_distance_meters` приоритетна — `ST_Length` по непрерывному
+    LINESTRING посчитал бы телепорт (и 3D-скачки от null-высот в WKT). Любой
+    новый расчёт статистики обязан идти через `buildCumulativeData`, не свой цикл.
 
 ---
 
