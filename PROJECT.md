@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-21, коммит `beacea9`, ветка `main`.
+по состоянию на 2026-07-21, коммит `85ea9b8`, ветка `main`.
 
 ---
 
@@ -2258,13 +2258,15 @@ Composable-обработчик системных разрешений для G
 
 #### `presentation/workout/start/WorkoutStartScreen.kt`
 Главный композитный экран тренировки: единая composable-функция для трёх визуальных режимов — «до старта», «активная тренировка», «оверлей итогов» (включая fullscreen-карту).
-- `@Composable fun WorkoutStartScreen(state, padding, onStartClick, onTypeSelected, onSheetTypeSelected, onPauseClick, onFinishClick, onMapTilesFailed, onToggleFavorite, onSearchQueryChange, onCloseSummary, onToggleFullscreenMap, onDeleteHistoryTraining, onOpenSensors = {})` — корневой Composable экрана. Строит `Column` с шапкой (дата), опциональным Doze-баннером, телом (`ActiveBody`/`SummaryBody` наложены через alpha-анимацию, оба в дереве одновременно — фиксирует общую высоту layout), картой `MapViewComposable` с наложенными GPS-бейджем/кнопками/карточкой статистики, и прогресс-баром (только в fullscreen-оверлее). Также рендерит `ModalBottomSheet` выбора типа активности с поиском.
+- `@Composable fun WorkoutStartScreen(state, padding, onStartClick, onTypeSelected, onSheetTypeSelected, onPauseClick, onFinishClick, onMapTilesFailed, onToggleFavorite, onSearchQueryChange, onCloseSummary, onToggleFullscreenMap, onDeleteHistoryTraining, onOpenSensors = {})` — корневой Composable экрана. Строит `Column` с шапкой (дата), опциональным Doze-баннером, телом (`ActiveBody`/`SummaryBody` наложены через alpha-анимацию, оба в дереве одновременно — фиксирует общую высоту layout), картой `MapViewComposable` с наложенными GPS-бейджем/кнопками, и прогресс-баром (только в fullscreen-оверлее). Также рендерит `ModalBottomSheet` выбора типа активности с поиском.
+- **Pre-start-макет = карта-герой**: тело `ActiveBody` (таймер+статистика) показывается только когда `state.isWorkoutStarted || overlayVisible` — до старта блок схлопнут (`AnimatedVisibility`), карта занимает всю высоту от даты до низа. Низ карты — оверлей `BottomCenter`: в pre-start `Column { ActivityTypeSelector; Spacer(10dp); кнопка «Начать» }`; на паузе (`isWorkoutStarted && !isTracking`) — одна кнопка «Продолжить»; в активной фазе (`isTracking`) — `Row { Пауза | Завершить }`. Выбор активности живёт ТОЛЬКО в pre-start (тип не меняется в ходе записи — в активной фазе селектора нет).
 - **Панель деталей summary**: локальный `detailsExpanded by remember(summary)` — чеврон на `StatsRow` разворачивает `SummaryDetailsPanel` (сплиты + график) ПОВЕРХ зоны карты (Box с фоном после интерцептора клика; MapView остаётся в композиции); интерцептор «тап по карте → fullscreen» отключается при развёрнутых деталях; гейт чеврона — `summaryHasDetails(summary)`.
 - **Шаринг**: `snapshotTick by remember` — «С картой» инкрементирует счётчик → `onSnapshot` собирает картинку `ShareImageComposer.composeWithMap` и открывает share sheet; «Только статистика» — `composeTrackCard` сразу; «Файл GPX» — `GpxComposer.shareGpx(ctx, summary)` (колбэк null при пустом `trackPoints` — пункт скрыт); все ветки на `Dispatchers.IO` через `rememberCoroutineScope`.
 - **KeepScreenOn**: `DisposableEffect(state.isTracking, state.keepScreenOn)` ставит `view.keepScreenOn` только при активной записи; снимается в `onDispose`.
 - **Статус гео-разрешения**: локальный `locationPermissionGranted by remember` (начальное значение — фактический `checkSelfPermission`, true приходит из `LocationPermissionHandler.onLocationGranted`) прокидывается в `MapViewComposable` — без него LocationComponent на свежей установке крашил процесс (нюанс 34).
 - `@Composable private fun ActiveHeader(dateDisplay)` — центрированная дата в шапке активной фазы.
-- `@Composable private fun ActiveBody(state, onTypeSelected, onMoreClick, isMoreActive, interactive)` — таймер + ряд статистики (дистанция/темп/калории; при `hrmConfigured` — 4-й `StatItem` «Пульс» с ужатыми `valueMinWidth` 75/115/80/45, чтобы ряд помещался на 360dp) + ряд из 3 закреплённых типов активности + кнопка "ещё" (`ic_activity_other`).
+- `@Composable private fun ActiveBody(state)` — таймер + ряд статистики (дистанция/темп/калории; при `hrmConfigured` — 4-й `StatItem` «Пульс» с ужатыми `valueMinWidth` 75/115/80/45, чтобы ряд помещался на 360dp). Селектор активности вынесен в `ActivityTypeSelector` (см. ниже).
+- `@Composable private fun ActivityTypeSelector(state, onTypeSelected, onMoreClick, isMoreActive, modifier)` — ряд из 3 закреплённых типов + кнопка "ещё" (`ic_activity_other`); контейнер со сплошным белым фоном (плавает поверх карты в pre-start, тайлы не должны просвечивать между иконками) и рамкой `ColorPrimary`.
 - `@Composable private fun StatItem(value, label, valueMinWidth)` — одна статистика с фиксированной минимальной шириной значения (от "прыжков" layout при смене длины числа).
 - `@Composable private fun WorkoutTypeIcon(iconModel, contentDescription, isActive, enabled, onClick)` — иконка типа активности 42dp с рамкой, активное состояние подсвечивается `ColorSecondary`.
 - `@Composable private fun BatteryOptBanner(onConfigureClick)` — предупреждающий баннер (мягкий амбер) о том, что приложение не в Doze whitelist.
