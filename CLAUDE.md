@@ -672,6 +672,18 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
   удалить debug-оверлей network_security_config и строку `LOCAL_API_URL` из
   глобального gradle.properties. Release всегда на prod.
 
+- **ВРЕМЕННО: карта на публичных OSM-тайлах** (21.07.2026) — дипломный
+  `tile.gottland.ru` выведен из эксплуатации; `STYLE_JSON`
+  (OfflineMapManager) указывает на `tile.openstreetmap.org` (maxzoom 19).
+  Требования OSMF Tile Usage Policy соблюдены: идентифицирующий User-Agent
+  ставит интерцептор в AuthModule (MapLibre ходит через общий OkHttpClient),
+  bulk-предзагрузки нет (OfflineMapManager обязан оставаться no-op,
+  работает только прозрачный LRU-кэш MapLibre). ⚠️ Policy запрещает
+  приложениям делать osm.org основным источником тайлов при заметном
+  трафике — **до масштабного релиза** поднять свой рендер-сервер или
+  перейти на коммерческого провайдера (MapTiler/Stadia, есть бесплатные
+  квоты). **Откат/замена:** один URL в `STYLE_JSON` + этот пункт.
+
 - **BR-5 закрыт бэком иначе** (ревизия 17.07.2026) — вместо per-point
   `recorded_at` сервер отдаёт параллельный массив `gps_points_timestamps`
   (+ `elevation_gain`); `GetTrainingDetailResponseDto` уже адаптирован
