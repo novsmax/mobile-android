@@ -24,6 +24,7 @@ import com.example.smarttracker.data.local.db.SmartTrackerDatabase
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import com.example.smarttracker.data.remote.AuthApiService
 import com.example.smarttracker.data.remote.buildAuthInterceptor
 import com.example.smarttracker.data.remote.TokenRefreshAuthenticator
@@ -155,6 +156,18 @@ abstract class AuthModule {
             // каждого запроса.
             val apiHost = BuildConfig.BASE_URL.toHttpUrl().host
             val authInterceptor = buildAuthInterceptor(tokenStorage, apiHost)
+            // Идентифицирующий User-Agent вместо дефолтного "okhttp/4.x".
+            // Требование OSMF Tile Usage Policy: MapLibre качает OSM-тайлы через
+            // этот же клиент (HttpRequestUtil.setOkHttpClient в SmartTrackerApp),
+            // анонимные UA там режутся. Для своего API и Coil — просто полезная
+            // диагностика (видно версию приложения в логах сервера).
+            val userAgent =
+                "SmartTracker/${BuildConfig.VERSION_NAME} (${BuildConfig.APPLICATION_ID}; Android)"
+            val userAgentInterceptor = Interceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder().header("User-Agent", userAgent).build()
+                )
+            }
             val logging = HttpLoggingInterceptor().apply {
                 level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY
                         else HttpLoggingInterceptor.Level.NONE
@@ -165,6 +178,7 @@ abstract class AuthModule {
                 redactHeader("Authorization")
             }
             return OkHttpClient.Builder()
+                .addInterceptor(userAgentInterceptor)
                 .addInterceptor(authInterceptor)
                 // Authenticator срабатывает при HTTP 401: обновляет токен и повторяет запрос.
                 // Если refresh тоже вернул 401 — очищает хранилище (принудительный выход).
