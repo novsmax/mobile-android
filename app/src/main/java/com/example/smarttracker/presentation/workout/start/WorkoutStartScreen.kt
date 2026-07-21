@@ -365,9 +365,12 @@ fun WorkoutStartScreen(
         }
 
         // ── Тело: таймер/статистика (active) ↔ активность/карточки (summary) ──
-        // В полноэкранном режиме карты схлопывается в ноль, оставляя только шапку.
+        // Показывается только когда тренировка идёт/на паузе (isWorkoutStarted)
+        // или открыт оверлей итогов. В pre-start блок схлопнут — карта занимает
+        // всю высоту до даты, а выбор активности живёт внизу над кнопкой старта.
+        // В полноэкранном режиме карты тоже схлопывается, оставляя только шапку.
         AnimatedVisibility(
-            visible = !isFullscreen,
+            visible = !isFullscreen && (state.isWorkoutStarted || overlayVisible),
             enter = expandVertically() + fadeIn(),
             exit  = shrinkVertically() + fadeOut(),
         ) {
@@ -386,13 +389,7 @@ fun WorkoutStartScreen(
                 // Active body всегда в дереве. Интерактивные элементы блокируются
                 // параметром interactive когда оверлей активен (alpha=0 клики не блочит).
                 Box(modifier = Modifier.alpha(activeAlpha)) {
-                    ActiveBody(
-                        state = state,
-                        onTypeSelected = onTypeSelected,
-                        onMoreClick = { showTypeSelector = true },
-                        isMoreActive = showTypeSelector,
-                        interactive = !overlayVisible,
-                    )
+                    ActiveBody(state = state)
                 }
                 // Summary body — placeholder пока оверлея нет (фиксирует высоту).
                 Box(modifier = Modifier.alpha(summaryAlpha)) {
@@ -607,10 +604,42 @@ fun WorkoutStartScreen(
                 )
             }
 
-            // ── Кнопки — низ карты, только в активной фазе ───────────────────
+            // ── Низ карты: выбор активности + кнопки ─────────────────────────
             if (!overlayVisible) {
-                if (!state.isTracking) {
-                    val isPaused = state.elapsedMs > 0
+                if (!state.isWorkoutStarted) {
+                    // Pre-start: селектор активности стопкой над кнопкой «Начать»,
+                    // с небольшим разрывом. Оба плавают у низа карты-героя.
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        ActivityTypeSelector(
+                            state = state,
+                            onTypeSelected = onTypeSelected,
+                            onMoreClick = { showTypeSelector = true },
+                            isMoreActive = showTypeSelector,
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onStartClick,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.workout_start),
+                                style = WorkoutTextStyles.primaryButtonLabel,
+                                color = Color.White,
+                            )
+                        }
+                    }
+                } else if (!state.isTracking) {
+                    // На паузе: одна кнопка «Продолжить» (выбор активности уже
+                    // недоступен — тип не меняется в ходе тренировки).
                     Button(
                         onClick = onStartClick,
                         modifier = Modifier
@@ -622,9 +651,7 @@ fun WorkoutStartScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
                     ) {
                         Text(
-                            text = stringResource(
-                                if (isPaused) R.string.workout_resume else R.string.workout_start
-                            ),
+                            text = stringResource(R.string.workout_resume),
                             style = WorkoutTextStyles.primaryButtonLabel,
                             color = Color.White,
                         )
@@ -834,11 +861,6 @@ private fun ActiveHeader(dateDisplay: String) {
 @Composable
 private fun ActiveBody(
     state: WorkoutStartViewModel.UiState,
-    onTypeSelected: (WorkoutType) -> Unit,
-    onMoreClick: () -> Unit,
-    isMoreActive: Boolean,
-    /** false когда поверх отрендерен оверлей итогов — отключает клики (alpha=0 их не блокирует) */
-    interactive: Boolean = true,
 ) {
     Column {
         // ── Таймер ───────────────────────────────────────────────────────────
@@ -886,35 +908,48 @@ private fun ActiveBody(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
 
-        // ── Переключатель типа активности ─────────────────────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .border(1.dp, ColorPrimary, RoundedCornerShape(10.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            state.pinnedTypes.forEach { type ->
-                WorkoutTypeIcon(
-                    iconModel = type.iconFile ?: type.imageUrl ?: activityIconRes(type.iconKey),
-                    contentDescription = type.name,
-                    isActive = !isMoreActive && type.id == state.selectedType?.id,
-                    enabled = interactive && !state.isWorkoutStarted,
-                    onClick = { onTypeSelected(type) },
-                )
-            }
+/**
+ * Переключатель типа активности (pre-start).
+ *
+ * Живёт внизу карты-героя над кнопкой «Начать» (перенесён из [ActiveBody]).
+ * Плавает поверх карты, поэтому у контейнера сплошной белый фон — иначе тайлы
+ * просвечивали бы между иконками. Показывается только до старта тренировки:
+ * тип нельзя менять в ходе записи, поэтому в активной фазе селектора нет.
+ */
+@Composable
+private fun ActivityTypeSelector(
+    state: WorkoutStartViewModel.UiState,
+    onTypeSelected: (WorkoutType) -> Unit,
+    onMoreClick: () -> Unit,
+    isMoreActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White)
+            .border(1.dp, ColorPrimary, RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        state.pinnedTypes.forEach { type ->
             WorkoutTypeIcon(
-                iconModel = R.drawable.ic_activity_other,
-                contentDescription = stringResource(R.string.workout_more),
-                isActive = isMoreActive,
-                enabled = interactive && !state.isWorkoutStarted,
-                onClick = onMoreClick,
+                iconModel = type.iconFile ?: type.imageUrl ?: activityIconRes(type.iconKey),
+                contentDescription = type.name,
+                isActive = !isMoreActive && type.id == state.selectedType?.id,
+                onClick = { onTypeSelected(type) },
             )
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
+        WorkoutTypeIcon(
+            iconModel = R.drawable.ic_activity_other,
+            contentDescription = stringResource(R.string.workout_more),
+            isActive = isMoreActive,
+            onClick = onMoreClick,
+        )
     }
 }
 
