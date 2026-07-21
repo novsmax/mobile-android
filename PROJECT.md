@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-21, коммит `745b387`, ветка `main`.
+по состоянию на 2026-07-21, коммит `3286d48`, ветка `main`.
 
 ---
 
@@ -2260,7 +2260,7 @@ Composable-обработчик системных разрешений для G
 Главный композитный экран тренировки: единая composable-функция для трёх визуальных режимов — «до старта», «активная тренировка», «оверлей итогов» (включая fullscreen-карту).
 - `@Composable fun WorkoutStartScreen(state, padding, onStartClick, onTypeSelected, onSheetTypeSelected, onPauseClick, onFinishClick, onMapTilesFailed, onToggleFavorite, onSearchQueryChange, onCloseSummary, onToggleFullscreenMap, onDeleteHistoryTraining, onOpenSensors = {})` — корневой Composable экрана. Строит `Column` с шапкой (дата), опциональным Doze-баннером, телом (`ActiveBody`/`SummaryBody` наложены через alpha-анимацию, оба в дереве одновременно — фиксирует общую высоту layout), картой `MapViewComposable` с наложенными GPS-бейджем/кнопками/карточкой статистики, и прогресс-баром (только в fullscreen-оверлее). Также рендерит `ModalBottomSheet` выбора типа активности с поиском.
 - **Панель деталей summary**: локальный `detailsExpanded by remember(summary)` — чеврон на `StatsRow` разворачивает `SummaryDetailsPanel` (сплиты + график) ПОВЕРХ зоны карты (Box с фоном после интерцептора клика; MapView остаётся в композиции); интерцептор «тап по карте → fullscreen» отключается при развёрнутых деталях; гейт чеврона — `summaryHasDetails(summary)`.
-- **Шаринг**: `snapshotTick by remember` — «С картой» инкрементирует счётчик → `onSnapshot` собирает картинку `ShareImageComposer.composeWithMap` и открывает share sheet; «Только статистика» — `composeTrackCard` сразу; обе ветки на `Dispatchers.IO` через `rememberCoroutineScope`.
+- **Шаринг**: `snapshotTick by remember` — «С картой» инкрементирует счётчик → `onSnapshot` собирает картинку `ShareImageComposer.composeWithMap` и открывает share sheet; «Только статистика» — `composeTrackCard` сразу; «Файл GPX» — `GpxComposer.shareGpx(ctx, summary)` (колбэк null при пустом `trackPoints` — пункт скрыт); все ветки на `Dispatchers.IO` через `rememberCoroutineScope`.
 - **KeepScreenOn**: `DisposableEffect(state.isTracking, state.keepScreenOn)` ставит `view.keepScreenOn` только при активной записи; снимается в `onDispose`.
 - **Статус гео-разрешения**: локальный `locationPermissionGranted by remember` (начальное значение — фактический `checkSelfPermission`, true приходит из `LocationPermissionHandler.onLocationGranted`) прокидывается в `MapViewComposable` — без него LocationComponent на свежей установке крашил процесс (нюанс 34).
 - `@Composable private fun ActiveHeader(dateDisplay)` — центрированная дата в шапке активной фазы.
@@ -2310,7 +2310,7 @@ Composable-обработчик системных разрешений для G
 
 #### `presentation/workout/summary/SummaryOverlay.kt`
 Набор Composable-компонентов оверлея итогов тренировки — рендерятся поверх `WorkoutStartScreen` без навигации.
-- `@Composable fun SummaryHeader(dateDisplay, showDelete, onDeleteClick, onShareWithMap, onShareStatsOnly)` — шапка с центрированной датой; справа — иконка «поделиться» (диалог выбора «С картой / Только статистика», скрыта при null-колбэках) и иконка корзины (с `AlertDialog` подтверждения "Удалить тренировку?") — только при `showDelete=true` (для `SummaryOrigin.HISTORY`).
+- `@Composable fun SummaryHeader(dateDisplay, showDelete, onDeleteClick, onShareWithMap, onShareStatsOnly, onShareGpx)` — шапка с центрированной датой; справа — иконка «поделиться» (диалог выбора «С картой / Только статистика / Файл GPX»; иконка скрыта при null `onShareWithMap`/`onShareStatsOnly`, пункт GPX скрыт при `onShareGpx=null` — пустой трек) и иконка корзины (с `AlertDialog` подтверждения "Удалить тренировку?") — только при `showDelete=true` (для `SummaryOrigin.HISTORY`). Три варианта шаринга не влезают в пару confirm/dismiss M3-диалога — все `TextButton` стопкой в `Column` слота `confirmButton`.
 - `@Composable fun SummaryBody(state: WorkoutSummaryUiState, detailsExpanded: Boolean = false, onToggleDetails: (() -> Unit)? = null)` — обёртка: `ActivityHeader` + `StatsRow`.
 - `@Composable private fun ActivityHeader(state)` — иконка активности (74dp рамка) + название + разделитель + темп.
 - `@Composable private fun StatsRow(state, detailsExpanded, onToggleDetails)` — три `StatCard` (дистанция/продолжительность/набор высоты) + стрелка-чеврон поверх правой границы третьей карточки: тап разворачивает панель деталей (поворот на 90° анимирован), при `onToggleDetails == null` чеврон декоративный.
@@ -2379,6 +2379,14 @@ Composable-обработчик системных разрешений для G
   - `fun shareBitmap(context, bitmap)` — PNG в `cacheDir/share/workout_share.png` (перезапись одним именем) → `FileProvider.getUriForFile` (authority `${packageName}.provider` — тот же, что у камеры) → `ACTION_SEND` + `FLAG_GRANT_READ_URI_PERMISSION` + chooser; вызывать с IO-диспетчера.
 
 Тесты — `ShareImageComposerTest` (normalizeTrack).
+
+#### `presentation/workout/summary/GpxComposer.kt`
+Сборка и шаринг GPX-файла тренировки (третий пункт диалога «Поделиться тренировкой»).
+- `GpxComposer` (object):
+  - `fun buildGpx(trackName, points: List<LocationPoint>, pauseGapIndices: List<Int>, includeTime: Boolean): String` — чистая сборка GPX 1.1 конкатенацией строк (тестируется на JVM): namespace `gpxtpx` (Garmin TrackPointExtension) для пульса `<gpxtpx:hr>`; паузы → отдельные `<trkseg>` (новый сегмент на каждом индексе из `pauseGapIndices` — «первая точка после resume»); `<ele>`/`hr` только у точек с ненулевыми `altitude`/`heartRate`; `<time>` (и `<metadata><time>`) только при `includeTime=true`; имя трека экранируется (`escapeXml`). Числа — `toString()` (локаленезависимо; `String.format` с ru-локалью дал бы запятые);
+  - `fun shareGpx(context, state: WorkoutSummaryUiState)` — `includeTime = SplitsBuilder.hasRealTiming(state.cumulativeData)` (история до BR-5 с синтетическими таймстемпами уходит без времени); файл `cacheDir/share/workout_track.gpx` (перезапись одним именем) → `FileProvider` (authority `${packageName}.provider`) → `ACTION_SEND` с MIME `application/gpx+xml`; пустой `trackPoints` → no-op; вызывать с IO-диспетчера.
+
+Тесты — `GpxComposerTest`.
 
 ### presentation/calendar
 
@@ -2500,6 +2508,9 @@ Composable-обработчик системных разрешений для G
 
 #### `app/src/test/java/com/example/smarttracker/presentation/workout/summary/ShareImageComposerTest.kt`
 Чистые JUnit-тесты `ShareImageComposer.normalizeTrack` (6): пустой/одноточечный/вырожденный трек → пустой результат; координаты в [0,1]; инверсия Y (север сверху); центрирование вытянутого трека; сохранение пропорций с cos-коррекцией долготы.
+
+#### `app/src/test/java/com/example/smarttracker/presentation/workout/summary/GpxComposerTest.kt`
+Чистые JUnit-тесты `GpxComposer.buildGpx` (8): каркас GPX 1.1 (версия/creator/оба xmlns); разбиение на `<trkseg>` по gap-индексам; `includeTime=false` → ни одного `<time>`; `includeTime=true` → ISO-время UTC в metadata и точках; `gpxtpx:hr` только у точек с пульсом; `<ele>` только с altitude; экранирование спецсимволов имени; пустой трек → валидный каркас без сегментов.
 
 #### `app/src/test/java/com/example/smarttracker/presentation/workout/start/WorkoutStartViewModelTest.kt`
 Юнит-тесты `WorkoutStartViewModel`. Robolectric (`@Config(sdk=[28], application=Application::class)`)

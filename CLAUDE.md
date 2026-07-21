@@ -259,7 +259,7 @@ com.example.smarttracker/
 │       ├── start/      WorkoutStartScreen, WorkoutStartViewModel
 │       ├── summary/    SummaryOverlay, WorkoutSummaryUiState,
 │       │               WorkoutSummaryFormatters, SplitsBuilder, TrackChart,
-│       │               SummaryDetailsPanel, ShareImageComposer
+│       │               SummaryDetailsPanel, ShareImageComposer, GpxComposer
 │       ├── map/        MapViewComposable, OfflineMapFallback
 │       └── permission/ LocationPermissionHandler
 └── utils/       ApiErrorHandler (перевод ошибок API на русский),
@@ -677,7 +677,9 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
   (+ `elevation_gain`); `GetTrainingDetailResponseDto` уже адаптирован
   (маппер собирает `timestampUtc` с fallback на индекс), сплиты/график
   в оверлее истории включаются сами (гейт `hasRealTiming`). Остаток:
-  **экспорт GPX** — теперь разблокирован, фича не начата.
+  **экспорт GPX** — ✅ реализован 21.07.2026: `GpxComposer` + пункт
+  «Файл GPX» в диалоге шаринга (пульс — `gpxtpx:hr`, паузы — сегментами,
+  `<time>` гейтится по `hasRealTiming`).
 
 - **BR-4 закрыт на обеих сторонах** (20.07.2026) —
   `AllowedEmailDomainsRepositoryImpl` теперь сетевая: сервер → DataStore-кэш →

@@ -185,7 +185,9 @@ per-point объектов с `recorded_at` бэкенд отдаёт `gps_track
 `GetTrainingDetailResponseDto.gpsPointsTimestamps`, маппер собирает
 `timestampUtc` из массива с fallback на индекс; сплиты/график скорости в
 оверлее истории включаются автоматически (гейт `SplitsBuilder.hasRealTiming`).
-Остаток на Android-стороне (не бэка): экспорт GPX теперь разблокирован.
+Android-остаток (экспорт GPX) закрыт 21.07.2026: `GpxComposer`, пункт
+«Файл GPX» в диалоге шаринга оверлея; пульс уходит `gpxtpx:hr` (BR-16),
+паузы — отдельными `<trkseg>`, `<time>` — только при реальных таймстемпах.
 
 ### ✅ BR-6. SQLAlchemy-модели синхронизированы со схемой БД
 **Закрыто:** `app/models/user.py` — `last_name`/`middle_name`/`weight`/`height`
