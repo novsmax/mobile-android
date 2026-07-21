@@ -3,7 +3,6 @@ package com.example.smarttracker.presentation.workout.start
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -374,25 +373,14 @@ fun WorkoutStartScreen(
             enter = expandVertically() + fadeIn(),
             exit  = shrinkVertically() + fadeOut(),
         ) {
-            // Наслоение через alpha — оба варианта (active vs summary) всегда
-            // участвуют в layout. Box принимает высоту max(active, summary),
-            // поэтому область карты под ним не меняет размер при переходе.
-            val activeAlpha   by animateFloatAsState(
-                targetValue = if (overlayVisible) 0f else 1f,
-                label = "active-alpha",
-            )
-            val summaryAlpha  by animateFloatAsState(
-                targetValue = if (overlayVisible) 1f else 0f,
-                label = "summary-alpha",
-            )
-            Box {
-                // Active body всегда в дереве. Интерактивные элементы блокируются
-                // параметром interactive когда оверлей активен (alpha=0 клики не блочит).
-                Box(modifier = Modifier.alpha(activeAlpha)) {
-                    ActiveBody(state = state)
-                }
-                // Summary body — placeholder пока оверлея нет (фиксирует высоту).
-                Box(modifier = Modifier.alpha(summaryAlpha)) {
+            // AnimatedContent размерит блок по РЕАЛЬНОМУ контенту (active короче
+            // summary — нет селектора) и плавно анимирует высоту при переходе
+            // active↔summary. Карта — сосед снизу с weight(1f), заполняет остаток;
+            // при смене высоты блока просто ресайзится (MapView не пересоздаётся —
+            // безопасно). Раньше был alpha-Box с max(active,summary) высотой —
+            // после выноса селектора он оставлял пустоту под статами в активной фазе.
+            AnimatedContent(targetState = overlayVisible, label = "workout-body") { showOverlay ->
+                if (showOverlay) {
                     SummaryBody(
                         state = summary ?: WorkoutSummaryUiState(),
                         detailsExpanded = detailsExpanded,
@@ -402,6 +390,8 @@ fun WorkoutStartScreen(
                             null
                         },
                     )
+                } else {
+                    ActiveBody(state = state)
                 }
             }
         }
