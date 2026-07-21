@@ -95,6 +95,7 @@ import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
 import com.example.smarttracker.presentation.workout.permission.LocationPermissionHandler
 import androidx.compose.runtime.rememberCoroutineScope
+import com.example.smarttracker.presentation.workout.summary.GpxComposer
 import com.example.smarttracker.presentation.workout.summary.ScrubDisplayStats
 import com.example.smarttracker.presentation.workout.summary.ShareImageComposer
 import com.example.smarttracker.presentation.workout.summary.StatsOverlayCard
@@ -331,6 +332,15 @@ fun WorkoutStartScreen(
                             ShareImageComposer.shareBitmap(ctx, bitmap)
                         }
                     },
+                    // GPX только при непустом треке: тренировка без GPS-точек
+                    // (зал/недоступный трек истории) — экспортировать нечего.
+                    onShareGpx = if (summary.trackPoints.isNotEmpty()) {
+                        {
+                            shareScope.launch(Dispatchers.IO) {
+                                GpxComposer.shareGpx(ctx, summary)
+                            }
+                        }
+                    } else null,
                 )
             } else {
                 ActiveHeader(dateDisplay = state.currentDate)
