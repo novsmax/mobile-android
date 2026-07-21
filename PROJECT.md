@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-21, коммит `85ea9b8`, ветка `main`.
+по состоянию на 2026-07-22, коммит `f151f67`, ветка `main`.
 
 ---
 
@@ -2258,7 +2258,7 @@ Composable-обработчик системных разрешений для G
 
 #### `presentation/workout/start/WorkoutStartScreen.kt`
 Главный композитный экран тренировки: единая composable-функция для трёх визуальных режимов — «до старта», «активная тренировка», «оверлей итогов» (включая fullscreen-карту).
-- `@Composable fun WorkoutStartScreen(state, padding, onStartClick, onTypeSelected, onSheetTypeSelected, onPauseClick, onFinishClick, onMapTilesFailed, onToggleFavorite, onSearchQueryChange, onCloseSummary, onToggleFullscreenMap, onDeleteHistoryTraining, onOpenSensors = {})` — корневой Composable экрана. Строит `Column` с шапкой (дата), опциональным Doze-баннером, телом (`ActiveBody`/`SummaryBody` наложены через alpha-анимацию, оба в дереве одновременно — фиксирует общую высоту layout), картой `MapViewComposable` с наложенными GPS-бейджем/кнопками, и прогресс-баром (только в fullscreen-оверлее). Также рендерит `ModalBottomSheet` выбора типа активности с поиском.
+- `@Composable fun WorkoutStartScreen(state, padding, onStartClick, onTypeSelected, onSheetTypeSelected, onPauseClick, onFinishClick, onMapTilesFailed, onToggleFavorite, onSearchQueryChange, onCloseSummary, onToggleFullscreenMap, onDeleteHistoryTraining, onOpenSensors = {})` — корневой Composable экрана. Строит `Column` с шапкой (дата), опциональным Doze-баннером, телом (`AnimatedContent` по `overlayVisible`: `ActiveBody` ↔ `SummaryBody`; размерит блок по РЕАЛЬНОМУ контенту и плавно анимирует высоту при переходе — карта-сосед снизу с `weight(1f)` ресайзится, MapView не пересоздаётся; прежний alpha-Box держал `max(active,summary)` высоту и после выноса селектора оставлял пустоту под статами в активной фазе), картой `MapViewComposable` с наложенными GPS-бейджем/кнопками, и прогресс-баром (только в fullscreen-оверлее). Также рендерит `ModalBottomSheet` выбора типа активности с поиском.
 - **Pre-start-макет = карта-герой**: тело `ActiveBody` (таймер+статистика) показывается только когда `state.isWorkoutStarted || overlayVisible` — до старта блок схлопнут (`AnimatedVisibility`), карта занимает всю высоту от даты до низа. Низ карты — оверлей `BottomCenter`: в pre-start `Column { ActivityTypeSelector; Spacer(10dp); кнопка «Начать» }`; на паузе (`isWorkoutStarted && !isTracking`) — одна кнопка «Продолжить»; в активной фазе (`isTracking`) — `Row { Пауза | Завершить }`. Выбор активности живёт ТОЛЬКО в pre-start (тип не меняется в ходе записи — в активной фазе селектора нет).
 - **Панель деталей summary**: локальный `detailsExpanded by remember(summary)` — чеврон на `StatsRow` разворачивает `SummaryDetailsPanel` (сплиты + график) ПОВЕРХ зоны карты (Box с фоном после интерцептора клика; MapView остаётся в композиции); интерцептор «тап по карте → fullscreen» отключается при развёрнутых деталях; гейт чеврона — `summaryHasDetails(summary)`.
 - **Шаринг**: `snapshotTick by remember` — «С картой» инкрементирует счётчик → `onSnapshot` собирает картинку `ShareImageComposer.composeWithMap` и открывает share sheet; «Только статистика» — `composeTrackCard` сразу; «Файл GPX» — `GpxComposer.shareGpx(ctx, summary)` (колбэк null при пустом `trackPoints` — пункт скрыт); все ветки на `Dispatchers.IO` через `rememberCoroutineScope`.
