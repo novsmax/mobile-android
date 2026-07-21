@@ -182,7 +182,7 @@ com.example.smarttracker/
 │   │   ├── AuthRepositoryImpl.kt
 │   │   ├── WorkoutRepositoryImpl.kt
 │   │   ├── PasswordRecoveryRepositoryImpl.kt
-│   │   ├── AllowedEmailDomainsRepositoryImpl.kt  (149-ФЗ, хардкод до BR-4)
+│   │   ├── AllowedEmailDomainsRepositoryImpl.kt  (149-ФЗ, сеть+DataStore-кэш, BR-4)
 │   │   ├── location/LocationRepositoryImpl.kt    (Room persistence)
 │   │   ├── MockPasswordRecoveryRepository.kt     (в DI не используется)
 │   │   └── MockWorkoutRepository.kt              (в DI не используется)
@@ -588,6 +588,7 @@ com.example.smarttracker/
 - `POST /auth/login` → access_token, refresh_token
 - `POST /auth/refresh` → access_token, refresh_token (**refresh_token — JSON-тело, `@Body RefreshTokenRequestDto`; см. нюанс 4. Query-param — старое ошибочное предположение, давало 422**)
 - `POST /auth/check-nickname` → is_available
+- `GET /auth/allowed-email-domains` → `{domains: [...]}` (публичный; BR-4, единый источник с серверной проверкой в register)
 - `GET /role/` → `[{role_id, name, ...}]`
 - `GET /role/user_roles` → `[{role_id, name}]` (**Bearer-токен обязателен**)
 - `GET /goal/` → `[{goal_id, description, id_role}]`
@@ -678,11 +679,11 @@ with open(f'{git_dir}/COMMIT_MSG', 'wb') as f:
   в оверлее истории включаются сами (гейт `hasRealTiming`). Остаток:
   **экспорт GPX** — теперь разблокирован, фича не начата.
 
-- **После BR-4 (`GET /auth/allowed-email-domains`)** — заменить
-  `AllowedEmailDomainsRepositoryImpl` на сетевую реализацию с кэшем
-  (план в TODO-комментарии внутри impl), хардкод оставить fallback'ом.
-  Клиентская часть 149-ФЗ уже реализована: `EmailValidator.isAllowedDomain`,
-  проверка только на регистрации (login/recovery не ограничиваются).
+- **BR-4 закрыт на обеих сторонах** (20.07.2026) —
+  `AllowedEmailDomainsRepositoryImpl` теперь сетевая: сервер → DataStore-кэш →
+  зашитый fallback; хардкод-список должен зеркалить серверный
+  (`app/core/email_domains.py` бэка) на момент сборки APK.
+  Проверка домена — только на регистрации (login/recovery не ограничиваются).
 
 ---
 
