@@ -1058,7 +1058,12 @@ class WorkoutStartViewModel @Inject constructor(
             // Fallback на клиентский расчёт по точкам — на случай старого ответа без поля
             // или null от сервера.
             val elevationM = (item.elevationGain ?: calculateElevationGain(points)).toFloat()
-            val cumData    = buildCumulativeData(points, emptyList())
+            // Сервер gap-индексы пауз не хранит — восстанавливаем эвристикой по
+            // разрывам времени между точками (на паузе точки не пишутся). Это
+            // выправляет elapsed в scrub, сплиты и график; на синтетических
+            // таймстемпах (до BR-5) эвристика ничего не находит.
+            val gapIndices = SplitsBuilder.detectPauseGapIndices(points)
+            val cumData    = buildCumulativeData(points, gapIndices)
             // Пульс: приоритет — серверные агрегаты из списка истории (BR-16,
             // тот же принцип, что elevation выше: доступны даже если трек не
             // загрузился). Fallback — клиентский расчёт по точкам трека
@@ -1079,9 +1084,11 @@ class WorkoutStartViewModel @Inject constructor(
                 elevationDisplay = WorkoutSummaryFormatters.formatElevation(elevationM),
                 trackPoints      = points,
                 cumulativeData   = cumData,
-                // Сплиты появятся, когда бэк начнёт отдавать реальные временные
-                // метки трека (BR-5) — buildSplits сам гейтит по правдоподобию
-                // elapsed (синтетические timestampUtc = index дают elapsed в мс).
+                // Эвристические gap-индексы — в snapshot: график (сегментация
+                // TrackChart) и GPX-экспорт (<trkseg>) читают их из state.
+                pauseGapIndices  = gapIndices,
+                // buildSplits сам гейтит по правдоподобию elapsed (синтетические
+                // timestampUtc = index у истории до BR-5 дают elapsed в мс).
                 splits           = SplitsBuilder.buildSplits(cumData),
                 avgHeartRateDisplay = (item.avgHeartRate?.roundToInt()
                     ?: heartRates.takeIf { it.isNotEmpty() }?.average()?.roundToInt())
@@ -1265,6 +1272,10 @@ class WorkoutStartViewModel @Inject constructor(
             // (localUUID → serverUUID) state уже содержит накопленное значение, и
             // currentKilocalories + deltaKcal дало бы K + K = 2K.
             var accumulatedKilocalories = 0.0
+            // Суммарное время пауз по gap-парам (elapsedNanos) — вычитается из
+            // длительности при расчёте среднего темпа (симметрично totalPausedMs
+            // в buildCumulativeData). Дистанция gap-пар и так не считается.
+            var pausedNanos = 0L
             var processedCount = 0
 
             // Дочерний Job таймаута: перезапускается после каждой новой точки,
@@ -1301,9 +1312,13 @@ class WorkoutStartViewModel @Inject constructor(
                     // не может прервать блок посередине — все аккумуляторы обновляются атомарно.
                     val (newDistanceM, avgSpeedMps, kilocalories) = withContext(Dispatchers.Default) {
                         // Считаем дистанцию только новых пар [processedCount, points.size).
-                        // Gap-пары пропускаем — симметрично с buildCumulativeData (summary).
+                        // Gap-пары пропускаем — симметрично с buildCumulativeData (summary);
+                        // их время копится в pausedNanos и вычитается из длительности темпа.
                         for (i in maxOf(1, processedCount) until points.size) {
-                            if (i in gapSet) continue
+                            if (i in gapSet) {
+                                pausedNanos += points[i].elapsedNanos - points[i - 1].elapsedNanos
+                                continue
+                            }
                             accumulatedDistanceM += calculateTrainingStatsUseCase
                                 .distanceBetween(points[i - 1], points[i])
                         }
@@ -1319,10 +1334,10 @@ class WorkoutStartViewModel @Inject constructor(
                         processedCount = points.size
 
                         // Длительность по монотонным часам (elapsedNanos) — не зависит от NTP/смены времени.
-                        // Известное ограничение: elapsedNanos продолжает тикать во время паузы,
-                        // поэтому пауза включается в итоговую длительность.
+                        // Паузное время (gap-пары) вычитается: средний темп считается по
+                        // активному движению, как в finish-оверлее (там — хронометр без пауз).
                         val durationSeconds = if (points.size >= 2)
-                            (points.last().elapsedNanos - points.first().elapsedNanos) / 1_000_000_000L
+                            (points.last().elapsedNanos - points.first().elapsedNanos - pausedNanos) / 1_000_000_000L
                         else 0L
 
                         val speed = if (durationSeconds > 0) accumulatedDistanceM / durationSeconds else 0.0
