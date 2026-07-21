@@ -164,6 +164,11 @@ class WorkoutStartViewModel @Inject constructor(
          */
         val keepScreenOn: Boolean = false,
         /**
+         * Завершение тренировки удержанием 3 сек (Меню → Настройки).
+         * true → кнопка «Завершить» требует зажатия с заполнением; false → тап.
+         */
+        val finishConfirmationHold: Boolean = true,
+        /**
          * Пульсометр настроен (адрес сохранён в настройках). Гейт HR-бейджа
          * и StatItem «Пульс»: без датчика ряд статов остаётся из трёх элементов.
          */
@@ -275,6 +280,7 @@ class WorkoutStartViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         keepScreenOn = s.keepScreenOn,
+                        finishConfirmationHold = s.finishConfirmationHold,
                         hrmConfigured = s.hrmDevices.isNotEmpty(),
                     )
                 }

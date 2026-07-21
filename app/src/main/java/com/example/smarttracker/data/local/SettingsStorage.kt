@@ -24,6 +24,13 @@ data class AppSettings(
     val voiceCueIntervalKm: Int = 1,
     val keepScreenOn: Boolean = false,
     /**
+     * Способ завершения тренировки: true — кнопку «Завершить» нужно удержать
+     * 3 сек (заполнение слева направо), false — завершение по обычному тапу.
+     * Дефолт true — защита от случайного нажатия во время тренировки
+     * (телефон в кармане, кнопка в нижней зоне под большим пальцем).
+     */
+    val finishConfirmationHold: Boolean = true,
+    /**
      * Сохранённые BLE-пульсометры. Пустой список = датчики не настроены
      * (гейт HR-бейджа и StatItem «Пульс»). Отдельного toggle нет:
      * список непуст = включено.
@@ -89,6 +96,9 @@ interface SettingsStorage {
     suspend fun setVoiceCueIntervalKm(intervalKm: Int)
 
     suspend fun setKeepScreenOn(enabled: Boolean)
+
+    /** true — завершение по удержанию 3 сек, false — по обычному тапу. */
+    suspend fun setFinishConfirmationHold(enabled: Boolean)
 
     /**
      * Добавить пульсометр в список (или обновить имя существующего)

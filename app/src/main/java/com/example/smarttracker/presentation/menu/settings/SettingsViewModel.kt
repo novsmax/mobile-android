@@ -48,4 +48,8 @@ class SettingsViewModel @Inject constructor(
     fun onKeepScreenOnChanged(enabled: Boolean) {
         viewModelScope.launch { settingsStorage.setKeepScreenOn(enabled) }
     }
+
+    fun onFinishConfirmationHoldChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsStorage.setFinishConfirmationHold(enabled) }
+    }
 }

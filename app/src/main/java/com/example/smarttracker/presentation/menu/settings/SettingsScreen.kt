@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,6 +72,7 @@ fun SettingsScreen(
     onVoiceCuesChanged: (Boolean) -> Unit,
     onVoiceCueIntervalChanged: (Int) -> Unit,
     onKeepScreenOnChanged: (Boolean) -> Unit,
+    onFinishConfirmationHoldChanged: (Boolean) -> Unit,
     onOpenSensors: () -> Unit,
 ) {
     // Пробный отыгрыш фразы при выборе громкости. Живёт в composition:
@@ -123,6 +125,7 @@ fun SettingsScreen(
                         text = "Настройки",
                         fontFamily = geologicaFontFamily,
                         fontWeight = FontWeight.Bold,
+                        fontStyle = FontStyle.Normal,
                         fontSize = 22.sp,
                         color = ColorPrimary,
                     )
@@ -185,6 +188,12 @@ fun SettingsScreen(
                 subtitle = "Экран остаётся включённым во время тренировки",
                 checked = settings.keepScreenOn,
                 onCheckedChange = onKeepScreenOnChanged,
+            )
+            SwitchRow(
+                title = "Удержание кнопки «Завершить»",
+                subtitle = "Завершение по зажатию 3 сек — защита от случайного нажатия",
+                checked = settings.finishConfirmationHold,
+                onCheckedChange = onFinishConfirmationHoldChanged,
             )
 
             SectionTitle("Датчики")

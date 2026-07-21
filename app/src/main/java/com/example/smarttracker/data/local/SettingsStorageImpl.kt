@@ -42,6 +42,7 @@ class SettingsStorageImpl @Inject constructor(
         val VOICE_CUES_ENABLED = booleanPreferencesKey("voice_cues_enabled")
         val VOICE_CUE_INTERVAL_KM = intPreferencesKey("voice_cue_interval_km")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+        val FINISH_CONFIRMATION_HOLD = booleanPreferencesKey("finish_confirmation_hold")
 
         /** JSON-список сохранённых пульсометров ([encodeHrmDevices]). */
         val HRM_DEVICES = stringPreferencesKey("hrm_devices")
@@ -77,6 +78,8 @@ class SettingsStorageImpl @Inject constructor(
                     if (it in AppSettings.ALLOWED_VOICE_INTERVALS) it else defaults.voiceCueIntervalKm
                 },
                 keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: defaults.keepScreenOn,
+                finishConfirmationHold = prefs[Keys.FINISH_CONFIRMATION_HOLD]
+                    ?: defaults.finishConfirmationHold,
                 hrmDevices = readHrmDevices(prefs),
                 // Legacy-датчик был единственным и выбранным — он же активный
                 hrmActiveAddress = prefs[Keys.HRM_ACTIVE_ADDRESS]
@@ -103,6 +106,10 @@ class SettingsStorageImpl @Inject constructor(
 
     override suspend fun setKeepScreenOn(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.KEEP_SCREEN_ON] = enabled }
+    }
+
+    override suspend fun setFinishConfirmationHold(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.FINISH_CONFIRMATION_HOLD] = enabled }
     }
 
     override suspend fun addHrmDevice(address: String, name: String?) {

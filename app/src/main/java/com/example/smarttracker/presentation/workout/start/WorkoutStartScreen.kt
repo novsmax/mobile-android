@@ -3,6 +3,9 @@ package com.example.smarttracker.presentation.workout.start
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,6 +79,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -675,22 +681,34 @@ fun WorkoutStartScreen(
                                 color = ColorPrimary,
                             )
                         }
-                        Button(
-                            onClick = onFinishClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(50.dp),
-                            shape = RoundedCornerShape(
-                                topStart = 0.dp, bottomStart = 0.dp,
-                                topEnd = 10.dp, bottomEnd = 10.dp,
-                            ),
-                            colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.workout_finish),
-                                style = WorkoutTextStyles.primaryButtonLabel,
-                                color = Color.White,
+                        val finishShape = RoundedCornerShape(
+                            topStart = 0.dp, bottomStart = 0.dp,
+                            topEnd = 10.dp, bottomEnd = 10.dp,
+                        )
+                        if (state.finishConfirmationHold) {
+                            // Завершение по удержанию 3 сек — защита от случайного тапа.
+                            HoldToFinishButton(
+                                onFinish = onFinishClick,
+                                shape = finishShape,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(50.dp),
                             )
+                        } else {
+                            Button(
+                                onClick = onFinishClick,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(50.dp),
+                                shape = finishShape,
+                                colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.workout_finish),
+                                    style = WorkoutTextStyles.primaryButtonLabel,
+                                    color = Color.White,
+                                )
+                            }
                         }
                     }
                 }
@@ -996,6 +1014,76 @@ private fun WorkoutTypeIcon(
             placeholder = painterResource(R.drawable.placeholder),
             error = painterResource(R.drawable.placeholder),
             modifier = Modifier.size(36.dp),
+        )
+    }
+}
+
+/**
+ * Кнопка «Завершить» с подтверждением по удержанию (3 сек).
+ *
+ * Пока палец держит кнопку — заполнение [ColorSecondary] растёт слева направо;
+ * дойдя до конца (3 сек), вызывает [onFinish]. Отпускание раньше — заполнение
+ * плавно откатывается к нулю, тренировка НЕ завершается (защита от случайного
+ * нажатия: кнопка в нижней зоне под большим пальцем, телефон в кармане).
+ *
+ * Обычный тап не срабатывает намеренно — нужно именно удержание.
+ * Режим включается настройкой `finishConfirmationHold` (Меню → Настройки);
+ * при выключенной настройке рисуется обычная `Button` с мгновенным тапом.
+ */
+@Composable
+private fun HoldToFinishButton(
+    onFinish: () -> Unit,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+) {
+    val holdDurationMs = 3000
+    // Animatable.value — читаемый State: кадр анимации перерисовывает заполнение.
+    val progress = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(ColorPrimary)
+            .pointerInput(onFinish) {
+                detectTapGestures(
+                    onPress = {
+                        var completed = false
+                        val fill = scope.launch {
+                            progress.snapTo(0f)
+                            progress.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(holdDurationMs, easing = LinearEasing),
+                            )
+                            // Дошло до конца, палец ещё держит — завершаем сразу.
+                            completed = true
+                            onFinish()
+                        }
+                        // Ждём отпускания/отмены жеста.
+                        tryAwaitRelease()
+                        if (!completed) {
+                            fill.cancel()
+                            scope.launch { progress.animateTo(0f, tween(250)) }
+                        }
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        // Заполнение слева направо: ширина = доля progress от ширины кнопки.
+        if (progress.value > 0f) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(progress.value)
+                    .background(ColorSecondary),
+            )
+        }
+        Text(
+            text = stringResource(R.string.workout_finish),
+            style = WorkoutTextStyles.primaryButtonLabel,
+            color = Color.White,
         )
     }
 }
