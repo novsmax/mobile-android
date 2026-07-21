@@ -1265,19 +1265,6 @@ class WorkoutStartViewModel @Inject constructor(
     private fun observeTrackingData(trainingId: String) {
         observerJob?.cancel()
         observerJob = viewModelScope.launch {
-            // Инкрементальный счётчик живёт в скоупе coroutine — синхронизация не нужна
-            var accumulatedDistanceM = 0.0
-            // Локальный аккумулятор калорий — симметричен accumulatedDistanceM.
-            // НЕ читаем _state.value.kilocalories: при перезапуске observer'а после re-key
-            // (localUUID → serverUUID) state уже содержит накопленное значение, и
-            // currentKilocalories + deltaKcal дало бы K + K = 2K.
-            var accumulatedKilocalories = 0.0
-            // Суммарное время пауз по gap-парам (elapsedNanos) — вычитается из
-            // длительности при расчёте среднего темпа (симметрично totalPausedMs
-            // в buildCumulativeData). Дистанция gap-пар и так не считается.
-            var pausedNanos = 0L
-            var processedCount = 0
-
             // Дочерний Job таймаута: перезапускается после каждой новой точки,
             // чтобы корректно обнаруживать потерю сигнала и после ACQUIRED.
             // Тренировка при потере сигнала НЕ останавливается — только обновляется
@@ -1303,52 +1290,37 @@ class WorkoutStartViewModel @Inject constructor(
                         restartTimeout()
                     }
 
-                    // gap-индексы из сервиса: пары (i-1, i) с i ∈ gapSet — это «телепорт»
+                    // gap-индексы из сервиса: пары (i-1, i) с i ∈ gapIndices — «телепорт»
                     // через паузу, реального движения там нет. Читаем до withContext.
-                    val gapSet = _state.value.pauseGapIndices.toHashSet()
+                    val gapIndices = _state.value.pauseGapIndices
 
-                    // Инкрементальный расчёт на фоновом потоке, чтобы не блокировать UI.
-                    // Внутри withContext нет точек приостановки, поэтому collectLatest
-                    // не может прервать блок посередине — все аккумуляторы обновляются атомарно.
-                    val (newDistanceM, avgSpeedMps, kilocalories) = withContext(Dispatchers.Default) {
-                        // Считаем дистанцию только новых пар [processedCount, points.size).
-                        // Gap-пары пропускаем — симметрично с buildCumulativeData (summary);
-                        // их время копится в pausedNanos и вычитается из длительности темпа.
-                        for (i in maxOf(1, processedCount) until points.size) {
-                            if (i in gapSet) {
-                                pausedNanos += points[i].elapsedNanos - points[i - 1].elapsedNanos
-                                continue
-                            }
-                            accumulatedDistanceM += calculateTrainingStatsUseCase
-                                .distanceBetween(points[i - 1], points[i])
-                        }
-
-                        // Калории инкрементальны на уровне точки. Gap-точка имеет
-                        // calories=null (сервис сбрасывает prevCaloriePoint на resume) →
-                        // её вклад 0, отдельно пропускать не нужно.
-                        for (index in processedCount until points.size) {
-                            accumulatedKilocalories += points[index].calories ?: 0.0
-                        }
-                        val kcal = accumulatedKilocalories
-
-                        processedCount = points.size
-
-                        // Длительность по монотонным часам (elapsedNanos) — не зависит от NTP/смены времени.
-                        // Паузное время (gap-пары) вычитается: средний темп считается по
-                        // активному движению, как в finish-оверлее (там — хронометр без пауз).
-                        val durationSeconds = if (points.size >= 2)
-                            (points.last().elapsedNanos - points.first().elapsedNanos - pausedNanos) / 1_000_000_000L
-                        else 0L
-
-                        val speed = if (durationSeconds > 0) accumulatedDistanceM / durationSeconds else 0.0
-                        Triple(accumulatedDistanceM, speed, kcal)
+                    // ПОЛНЫЙ пересчёт на каждой эмиссии через тот же buildCumulativeData,
+                    // что и оверлей итогов/scrub — единый источник истины: live-дистанция,
+                    // сохраняемое значение и scrub гарантированно совпадают.
+                    // Почему не инкрементально: инкрементальный аккумулятор не мог
+                    // ретроактивно вычесть телепорт, если gap-индекс приходил ПОСЛЕ того,
+                    // как его пост-резюм точка уже обработана (async-гонка Intent→SharedFlow→
+                    // state против Room-потока, особенно при флаппинге автопаузы) — телепорт
+                    // впечатывался в дистанцию навсегда. Полный пересчёт самокорректируется:
+                    // на следующей эмиссии gap уже в state, и пара исключается.
+                    // O(n) на эмиссию, для реального числа точек (<~5000) незначимо.
+                    val (distanceM, avgSpeedMps, kilocalories) = withContext(Dispatchers.Default) {
+                        val cum = buildCumulativeData(points, gapIndices)
+                        val distM = (cum.distancesKm.lastOrNull() ?: 0f).toDouble() * 1000.0
+                        // elapsedMs из buildCumulativeData уже без пауз (totalPausedMs вычтено).
+                        val activeMs = cum.elapsedMs.lastOrNull() ?: 0L
+                        val speed = if (activeMs > 0L) distM / (activeMs / 1000.0) else 0.0
+                        // Калории: сумма по точкам; gap-точка имеет calories=null (сервис
+                        // сбрасывает prevCaloriePoint на resume) → вклад 0.
+                        val kcal = points.sumOf { it.calories ?: 0.0 }
+                        Triple(distM, speed, kcal)
                     }
 
                     _state.update { it.copy(
-                        distanceDisplay = "%.2f км".format(newDistanceM / 1000.0),
+                        distanceDisplay = "%.2f км".format(distanceM / 1000.0),
                         avgSpeedDisplay = formatPace(avgSpeedMps),
                         caloriesDisplay = "${kilocalories.toInt()} кКал",
-                        distanceMeters  = newDistanceM,
+                        distanceMeters  = distanceM,
                         kilocalories    = kilocalories,
                         trackPoints     = points,
                     ) }
