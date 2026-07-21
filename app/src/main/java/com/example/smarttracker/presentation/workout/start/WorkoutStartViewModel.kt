@@ -644,6 +644,8 @@ class WorkoutStartViewModel @Inject constructor(
             timeEnd             = Instant.now()
                 .atZone(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            // Статистики orphan-тренировки у клиента нет; null валиден (BR-7):
+            // дистанцию сервер посчитает из уже загруженных точек, ккал = null.
             totalDistanceMeters = null,
             totalKilocalories   = null,
         ).onFailure { e ->
@@ -823,13 +825,11 @@ class WorkoutStartViewModel @Inject constructor(
             val timeEnd = Instant.now()
                 .atZone(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-            // Шлём фактические значения даже при 0.0 — иначе Gson дропает null-поля,
-            // и в тело /save_training уходит только {"time_end":"..."} без
-            // total_distance_meters / total_kilocalories. Бэк на таком пустом
-            // теле падает с 500 (баг сервера, не обрабатывает Optional как
-            // отсутствующее поле). 0.0 валиден семантически: тренировка без
-            // движения → 0 м, 0 ккал. Подтверждено в логе 2026-05-18 19:41
-            // (training_id 7aa98edb-..., 1 GPS-точка, 17 сек → 500).
+            // Шлём фактические live-значения осознанно (не как воркэраунд):
+            // kilocalories сервер сам не вычислит — MET-расчёт с профилем
+            // пользователя есть только у клиента; дистанцию сервер пересчитает
+            // из трека (PostGIS), но реальное значение информативно для сверки.
+            // Частичное тело (один time_end) сервер тоже принимает — BR-7 закрыт.
             val distanceMeters = state.distanceMeters
             val kilocalories   = state.kilocalories
 
