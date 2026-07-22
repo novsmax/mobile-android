@@ -21,11 +21,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.smarttracker.R
 import com.example.smarttracker.domain.model.TrainingHistoryItem
+import com.example.smarttracker.domain.model.WorkoutType
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
+import java.time.LocalDate
 
 /**
  * Дневной вид истории тренировок.
@@ -142,3 +146,42 @@ private val DayRowHeight = 96.dp
 private val DayCardHeight = 86.dp
 private val DayStripWidth = 28.dp
 private val DayStripIconSize = 20.dp
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+/**
+ * Общий фейк для превью всех трёх timeline-view (Day/Week/Month).
+ * selectedDate = 22.07.2026 (среда): t1 в этот день, t2 днём раньше (та же неделя),
+ * t3 в начале месяца — покрывает и день, и неделю, и месяц.
+ */
+internal fun previewHistoryState(mode: HistoryViewMode = HistoryViewMode.DAY) = TrainingHistoryUiState(
+    isLoading = false,
+    viewMode = mode,
+    selectedDate = LocalDate.of(2026, 7, 22),
+    workoutTypes = listOf(
+        WorkoutType(id = 1, name = "Бег", iconKey = "1"),
+        WorkoutType(id = 3, name = "Велосипед", iconKey = "3"),
+    ),
+    items = listOf(
+        TrainingHistoryItem("t1", 1, LocalDate.of(2026, 7, 22),
+            "2026-07-22T08:00:00+00:00", "2026-07-22T08:35:00+00:00", 320.0, 5200.0, 2.6, 24.0),
+        TrainingHistoryItem("t2", 3, LocalDate.of(2026, 7, 21),
+            "2026-07-21T18:00:00+00:00", "2026-07-21T18:50:00+00:00", 410.0, 15000.0, 5.0, 60.0),
+        TrainingHistoryItem("t3", 1, LocalDate.of(2026, 7, 18),
+            "2026-07-18T07:00:00+00:00", "2026-07-18T07:40:00+00:00", 300.0, 6000.0, 2.5, 30.0),
+    ),
+)
+
+@Preview(showBackground = true, name = "История — день")
+@Composable
+private fun DayTimelineViewPreview() {
+    SmartTrackerTheme { DayTimelineView(state = previewHistoryState(HistoryViewMode.DAY)) }
+}
+
+@Preview(showBackground = true, name = "История — пустой день")
+@Composable
+private fun DayTimelineViewEmptyPreview() {
+    SmartTrackerTheme {
+        DayTimelineView(state = TrainingHistoryUiState(isLoading = false, selectedDate = LocalDate.of(2026, 7, 22)))
+    }
+}

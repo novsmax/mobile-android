@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -169,3 +171,13 @@ private val MonthCardHeight = 160.dp
 private val MonthStripWidth = 24.dp
 private val MonthStripIconSize = 16.dp
 private val MonthInfoWidth = 140.dp
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+@Preview(showBackground = true, name = "История — месяц")
+@Composable
+private fun MonthTimelineViewPreview() {
+    SmartTrackerTheme {
+        MonthTimelineView(state = previewHistoryState(HistoryViewMode.MONTH), onWeekSelected = {})
+    }
+}

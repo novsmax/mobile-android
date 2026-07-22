@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -136,3 +138,13 @@ private val WeekRowHeight = 110.dp
 private val WeekCardHeight = 110.dp
 private val WeekStripWidth = 36.dp
 private val WeekStripIconSize = 26.dp
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+@Preview(showBackground = true, name = "История — неделя")
+@Composable
+private fun WeekTimelineViewPreview() {
+    SmartTrackerTheme {
+        WeekTimelineView(state = previewHistoryState(HistoryViewMode.WEEK), onDaySelected = {})
+    }
+}

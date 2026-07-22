@@ -45,11 +45,13 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.smarttracker.R
 import com.example.smarttracker.presentation.theme.ColorPrimary
 import com.example.smarttracker.presentation.theme.ColorSecondary
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
 
@@ -539,4 +541,36 @@ fun TrainingProgressBar(
             )
         }
     }
+}
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+private fun previewSummaryState() = WorkoutSummaryUiState(
+    dateDisplay = "22 июля",
+    activityName = "Бег",
+    activityIconKey = "1",
+    paceDisplay = "5:06 мин/км",
+    distanceDisplay = "2.45 км",
+    durationDisplay = "00:12:34",
+    elevationDisplay = "12 м",
+    avgHeartRateDisplay = "148 уд/мин",
+    maxHeartRateDisplay = "172 уд/мин",
+)
+
+@Preview(showBackground = true, name = "Итоги — тело")
+@Composable
+private fun SummaryBodyPreview() {
+    SmartTrackerTheme { SummaryBody(state = previewSummaryState()) }
+}
+
+@Preview(showBackground = true, name = "Итоги — карточка поверх карты", backgroundColor = 0xFF88AACC)
+@Composable
+private fun StatsOverlayCardPreview() {
+    SmartTrackerTheme { StatsOverlayCard(state = previewSummaryState()) }
+}
+
+@Preview(showBackground = true, name = "Прогресс-бар трека", widthDp = 320)
+@Composable
+private fun TrainingProgressBarPreview() {
+    SmartTrackerTheme { TrainingProgressBar(progress = 0.6f) }
 }

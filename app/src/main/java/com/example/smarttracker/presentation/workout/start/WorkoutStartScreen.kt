@@ -84,6 +84,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,6 +97,7 @@ import com.example.smarttracker.presentation.theme.ColorGpsInactive
 import com.example.smarttracker.presentation.workout.map.MapViewComposable
 import com.example.smarttracker.presentation.theme.ColorPrimary
 import com.example.smarttracker.presentation.theme.ColorSecondary
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import com.example.smarttracker.presentation.theme.WorkoutTextStyles
 import com.example.smarttracker.presentation.workout.activityIconRes
 import com.example.smarttracker.presentation.workout.permission.LocationPermissionHandler
@@ -1132,4 +1134,53 @@ private fun BatteryOptBanner(onConfigureClick: () -> Unit) {
         }
     }
 }
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+// Карта в @Preview рисуется заглушкой (MapViewComposable гейтит LocalInspectionMode).
+
+private val previewWorkoutTypes = listOf(
+    WorkoutType(id = 1, name = "Бег", iconKey = "1"),
+    WorkoutType(id = 3, name = "Велосипед", iconKey = "3"),
+    WorkoutType(id = 5, name = "Ходьба", iconKey = "5"),
+)
+
+@Composable
+private fun WorkoutStartScreenPreviewHost(state: WorkoutStartViewModel.UiState) {
+    SmartTrackerTheme {
+        WorkoutStartScreen(
+            state = state,
+            padding = PaddingValues(0.dp),
+            onStartClick = {}, onTypeSelected = {}, onSheetTypeSelected = {},
+            onPauseClick = {}, onFinishClick = {}, onMapTilesFailed = {},
+            onToggleFavorite = {}, onSearchQueryChange = {}, onCloseSummary = {},
+            onToggleFullscreenMap = {}, onDeleteHistoryTraining = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Тренировка — до старта")
+@Composable
+private fun WorkoutStartPreStartPreview() = WorkoutStartScreenPreviewHost(
+    WorkoutStartViewModel.UiState(
+        currentDate = "22.07.2026 (Среда)",
+        pinnedTypes = previewWorkoutTypes,
+        selectedType = previewWorkoutTypes.first(),
+    )
+)
+
+@Preview(showBackground = true, name = "Тренировка — активная")
+@Composable
+private fun WorkoutStartActivePreview() = WorkoutStartScreenPreviewHost(
+    WorkoutStartViewModel.UiState(
+        currentDate = "22.07.2026 (Среда)",
+        pinnedTypes = previewWorkoutTypes,
+        selectedType = previewWorkoutTypes.first(),
+        isWorkoutStarted = true,
+        isTracking = true,
+        timerDisplay = "00:12:34",
+        distanceDisplay = "2.45 км",
+        avgSpeedDisplay = "5:06 мин/км",
+        caloriesDisplay = "180 кКал",
+    )
+)
 
