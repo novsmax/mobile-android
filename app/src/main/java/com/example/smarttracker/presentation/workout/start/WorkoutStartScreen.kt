@@ -87,6 +87,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -1086,15 +1087,27 @@ private fun WorkoutCoachmark(
         ) {
             drawRect(Color.Black.copy(alpha = 0.62f))
             hole?.let { h ->
-                val r = CornerRadius(10.dp.toPx())
+                // Углы как у кнопки «Завершить»: справа скруглены (topEnd/bottomEnd),
+                // слева квадратные (кнопка стыкуется с «Пауза»). drawRoundRect даёт
+                // одинаковые углы — поэтому Path из RoundRect с радиусами по углам.
+                val cr = CornerRadius(12.dp.toPx())
+                val holePath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            rect = h,
+                            topLeft = CornerRadius.Zero,
+                            topRight = cr,
+                            bottomRight = cr,
+                            bottomLeft = CornerRadius.Zero,
+                        )
+                    )
+                }
                 // Прорезаем дырку — под ней видна реальная подсвеченная кнопка.
-                drawRoundRect(Color.Transparent, h.topLeft, h.size, r, blendMode = BlendMode.Clear)
+                drawPath(holePath, Color.Transparent, blendMode = BlendMode.Clear)
                 // Обводка-подсветка вокруг кнопки.
-                drawRoundRect(
+                drawPath(
+                    path = holePath,
                     color = ColorSecondary,
-                    topLeft = h.topLeft,
-                    size = h.size,
-                    cornerRadius = r,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
                 )
                 // Стрелка-треугольник над дыркой, остриём вниз к кнопке.
