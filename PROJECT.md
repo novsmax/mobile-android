@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-22, коммит `0c7fe80`, ветка `main`.
+по состоянию на 2026-07-22, коммит `551c454`, ветка `main`.
 
 ---
 
@@ -463,7 +463,8 @@ Domain-модель типа тренировки.
   - `suspend fun assignBatchId(pointIds: List<Long>, batchId: String)` — назначить batchId группе точек перед отправкой (для атомарной пометки батча отправленным).
   - `suspend fun markBatchAsSent(batchId: String)` — пометить все точки батча как отправленные после успешной загрузки.
   - `fun observePointsForTraining(trainingId: String): Flow<List<LocationPoint>>` — наблюдение за точками в реальном времени для UI.
-  - `suspend fun getLastKnownPoint(): LocationPoint?` — последняя сохранённая точка из любой тренировки, для начального центрирования карты до получения GPS-сигнала.
+  - `suspend fun getLastKnownPoint(): LocationPoint?` — последняя известная позиция для центрирования карты до GPS-фикса: Room-точка, иначе persisted fallback (durable, переживает удаление точек при финише). null только при самом первом запуске.
+  - `suspend fun saveLastKnownLocation(latitude: Double, longitude: Double)` — персистит последнюю локацию в durable-хранилище (пишется на discovery/tracking-точках, читается как fallback в `getLastKnownPoint`).
   - `suspend fun deletePointsForTraining(trainingId: String)` — удаляет все точки тренировки (используется для очистки discovery-точек).
   - `suspend fun rekeyTrainingId(oldId: String, newId: String)` — переназначает trainingId точек с локального UUID на серверный при офлайн-старте.
 
@@ -1383,7 +1384,7 @@ Mock-реализация `PasswordRecoveryRepository` для разработк
 #### `data/repository/location/LocationRepositoryImpl.kt`
 Реализация `LocationRepository` (domain-интерфейс) поверх Room DAO — персистентное хранилище GPS-точек тренировки.
 
-- `LocationRepositoryImpl` (class, `@Inject constructor()`, привязка `@Singleton` через `@Binds` в `AuthModule`) — зависимость: `GpsPointDao`.
+- `LocationRepositoryImpl` (class, `@Inject constructor()`, привязка `@Singleton` через `@Binds` в `AuthModule`) — зависимости: `GpsPointDao`, `@ApplicationContext Context` (для durable-хранилища последней локации — `SharedPreferences` «smarttracker_last_location»).
   - `suspend fun savePoint(point: LocationPoint)` — вставка одной точки (`dao.insert`).
   - `suspend fun savePoints(points: List<LocationPoint>)` — batch-вставка.
   - `suspend fun getPointsForTraining(trainingId: String): List<LocationPoint>` — все точки тренировки.
@@ -1391,7 +1392,8 @@ Mock-реализация `PasswordRecoveryRepository` для разработк
   - `suspend fun assignBatchId(pointIds: List<Long>, batchId: String)` — присваивает batchId группе точек перед отправкой.
   - `suspend fun markBatchAsSent(batchId: String)` — помечает батч как отправленный.
   - `fun observePointsForTraining(trainingId: String): Flow<List<LocationPoint>>` — реактивный поток точек (для отрисовки трека на карте в реальном времени).
-  - `suspend fun getLastKnownPoint(): LocationPoint?` — последняя точка среди всех тренировок (`excludedTrainingId = null`).
+  - `suspend fun getLastKnownPoint(): LocationPoint?` — последняя точка среди всех тренировок (`dao.getLastPoint(excludedTrainingId = null)`) **?: persisted fallback** — точки удаляются при финише, поэтому при пустом Room возвращается минимальный `LocationPoint` (только lat/lng) из `SharedPreferences`. Нужно для центрирования карты на район прошлой локации до GPS-фикса даже после завершённой тренировки.
+  - `suspend fun saveLastKnownLocation(latitude: Double, longitude: Double)` — пишет lat/lng в prefs (Double как Long-биты `doubleToRawLongBits`, без потери точности). Вызывается из `WorkoutStartViewModel.startGpsStatusObserver` на каждой discovery-точке.
   - `suspend fun deletePointsForTraining(trainingId: String)` — удаление всех точек тренировки (используется для очистки discovery-точек).
   - `suspend fun rekeyTrainingId(oldId: String, newId: String)` — переключение принадлежности точек с одного `trainingId` на другой (offline-старт → server UUID).
 
