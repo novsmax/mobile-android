@@ -1370,6 +1370,11 @@ class WorkoutStartViewModel @Inject constructor(
                         _state.update { it.copy(gpsStatus = GpsStatus.ACQUIRED) }
                     }
                     restartTimeout()
+                    // Персистим последнюю discovery-локацию: переживёт удаление
+                    // точек при финише и даст мгновенное центрирование карты на
+                    // следующем холодном старте (до нового GPS-фикса).
+                    val last = points.last()
+                    locationRepository.saveLastKnownLocation(last.latitude, last.longitude)
                 }
             }
         }
