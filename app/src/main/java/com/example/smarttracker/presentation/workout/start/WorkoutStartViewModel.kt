@@ -169,6 +169,11 @@ class WorkoutStartViewModel @Inject constructor(
          */
         val finishConfirmationHold: Boolean = true,
         /**
+         * Показан ли одноразовый onboarding-coachmark (первый вход в активную
+         * тренировку). true → больше не показываем. Персистится в настройках.
+         */
+        val coachmarkShown: Boolean = false,
+        /**
          * Пульсометр настроен (адрес сохранён в настройках). Гейт HR-бейджа
          * и StatItem «Пульс»: без датчика ряд статов остаётся из трёх элементов.
          */
@@ -281,6 +286,7 @@ class WorkoutStartViewModel @Inject constructor(
                     it.copy(
                         keepScreenOn = s.keepScreenOn,
                         finishConfirmationHold = s.finishConfirmationHold,
+                        coachmarkShown = s.workoutCoachmarkShown,
                         hrmConfigured = s.hrmDevices.isNotEmpty(),
                     )
                 }
@@ -757,6 +763,11 @@ class WorkoutStartViewModel @Inject constructor(
         applyPauseLocally()
         // GPS-трекер продолжает работать (сервис жив), но точки в Room не пишутся
         LocationTrackingService.setRecording(context, false)
+    }
+
+    /** «Понятно» в onboarding-coachmark — больше не показывать (персист в настройках). */
+    fun onWorkoutCoachmarkDismissed() {
+        viewModelScope.launch { settingsStorage.setWorkoutCoachmarkShown(true) }
     }
 
     /**

@@ -99,6 +99,7 @@ fun WorkoutHomeScreen(
                         onToggleFullscreenMap = viewModel::onToggleFullscreenMap,
                         onDeleteHistoryTraining = viewModel::onDeleteHistoryTraining,
                         onOpenSensors = { showSensorsOverlay = true },
+                        onCoachmarkDismissed = viewModel::onWorkoutCoachmarkDismissed,
                     )
                     if (showSensorsOverlay) {
                         SensorsDialog(onClose = { showSensorsOverlay = false })

@@ -10,6 +10,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,9 +51,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -109,6 +114,7 @@ import com.example.smarttracker.presentation.workout.summary.ShareImageComposer
 import com.example.smarttracker.presentation.workout.summary.StatsOverlayCard
 import com.example.smarttracker.presentation.workout.summary.SummaryBody
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.example.smarttracker.presentation.workout.summary.SummaryDetailsPanel
 import com.example.smarttracker.presentation.workout.summary.SummaryHeader
@@ -153,6 +159,7 @@ fun WorkoutStartScreen(
     onToggleFullscreenMap: () -> Unit,
     onDeleteHistoryTraining: () -> Unit,
     onOpenSensors: () -> Unit = {},
+    onCoachmarkDismissed: () -> Unit = {},
 ) {
     // ── Статус Doze whitelist (для баннера) ──────────────────────────────────────
     // batteryOptimized = true → приложение в whitelist → баннер скрыт.
@@ -301,6 +308,18 @@ fun WorkoutStartScreen(
         paceDisplay = s.paceDisplay,
     )
 
+    // ── Хинт «Удерживайте 3 сек» на короткий тап по «Завершить» ──────────────
+    // Инкремент триггера (из onShortTapFinish) перезапускает таймер авто-скрытия.
+    var finishHintTrigger by remember { mutableIntStateOf(0) }
+    var finishHintVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(finishHintTrigger) {
+        if (finishHintTrigger > 0) {
+            finishHintVisible = true
+            delay(2200)
+            finishHintVisible = false
+        }
+    }
+
     // ── Системная кнопка Back ────────────────────────────────────────────────
     // В полноэкранном режиме карты — сворачиваем к обычному оверлею.
     // При развёрнутых деталях — сворачиваем панель.
@@ -313,6 +332,8 @@ fun WorkoutStartScreen(
         }
     }
 
+    // Box-обёртка — чтобы поверх экрана лечь onboarding-coachmark на весь экран.
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -652,6 +673,7 @@ fun WorkoutStartScreen(
                         leftLabel = stringResource(R.string.workout_resume),
                         onLeft = onStartClick,
                         onFinish = onFinishClick,
+                        onShortTapFinish = { finishHintTrigger++ },
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
@@ -660,10 +682,20 @@ fun WorkoutStartScreen(
                         leftLabel = stringResource(R.string.workout_pause),
                         onLeft = onPauseClick,
                         onFinish = onFinishClick,
+                        onShortTapFinish = { finishHintTrigger++ },
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                     )
                 }
+
+                // Хинт «Удерживайте 3 сек» — на короткий тап по «Завершить» в hold-режиме.
+                // Выезжает справа над кнопкой, авто-скрывается (см. LaunchedEffect выше).
+                FinishHoldHint(
+                    visible = finishHintVisible,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 74.dp),
+                )
             }
         }
 
@@ -691,6 +723,15 @@ fun WorkoutStartScreen(
             }
         }
     }
+
+        // ── Onboarding-coachmark: одноразовый при первом входе в активную фазу ──
+        if (state.isWorkoutStarted && !state.coachmarkShown && !overlayVisible && !isFullscreen) {
+            WorkoutCoachmark(
+                finishConfirmationHold = state.finishConfirmationHold,
+                onDismiss = onCoachmarkDismissed,
+            )
+        }
+    } // конец Box-обёртки
 
     // ── Шторка выбора активности (только в активной фазе) ────────────────────
     if (showTypeSelector && !overlayVisible) {
@@ -979,11 +1020,117 @@ private fun WorkoutTypeIcon(
  * @param finishConfirmationHold правая кнопка требует удержания 3 сек (см.
  *   [FinishActionButton]).
  */
+/**
+ * Одноразовый onboarding-coachmark при первом входе в активную тренировку.
+ *
+ * Скрим на весь экран + callout-карточка над рядом кнопок со стрелкой вниз,
+ * указывающей на «Завершить» (правая кнопка). Объясняет неочевидные механики:
+ * удержание «Завершить» (если включено), кнопки на паузе, автопаузу в настройках.
+ * Тап по скриму или «Понятно» → [onDismiss] (персист, больше не показываем).
+ */
+@Composable
+private fun WorkoutCoachmark(
+    finishConfirmationHold: Boolean,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.6f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 74.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White)
+                    .padding(16.dp),
+            ) {
+                Text(
+                    text = "Управление тренировкой",
+                    color = ColorPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(10.dp))
+                if (finishConfirmationHold) {
+                    CoachmarkTip("Кнопку «Завершить» удерживайте 3 секунды — защита от случайного нажатия.")
+                }
+                CoachmarkTip("На паузе доступны «Продолжить» и «Завершить».")
+                CoachmarkTip("Автопаузу (авто-стоп при остановке) можно включить в Настройках.")
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text(text = "Понятно", color = ColorPrimary, fontWeight = FontWeight.Bold)
+                }
+            }
+            // Стрелка-указатель к правой кнопке «Завершить» (~75% ширины ряда).
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(Modifier.weight(3f))
+                Icon(
+                    imageVector = Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** Один пункт-совет в coachmark: маркер «•» + текст. */
+@Composable
+private fun CoachmarkTip(text: String) {
+    Row(modifier = Modifier.padding(vertical = 3.dp)) {
+        Text(text = "•  ", color = ColorPrimary, fontSize = 14.sp)
+        Text(text = text, color = ColorPrimary, fontSize = 14.sp)
+    }
+}
+
+/**
+ * Хинт «Удерживайте 3 сек» — выезжает справа с fade, авто-скрывается.
+ * Отдельный composable (не inline): вне вложенных Column/Box-скоупов
+ * `AnimatedVisibility` разрешается однозначно (плоская перегрузка).
+ */
+@Composable
+private fun FinishHoldHint(visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+        modifier = modifier,
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(ColorPrimary)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.workout_hold_hint),
+                color = Color.White,
+                fontSize = 13.sp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun PausableFinishRow(
     leftLabel: String,
     onLeft: () -> Unit,
     onFinish: () -> Unit,
+    onShortTapFinish: () -> Unit,
     finishConfirmationHold: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1017,6 +1164,7 @@ private fun PausableFinishRow(
         FinishActionButton(
             finishConfirmationHold = finishConfirmationHold,
             onFinish = onFinish,
+            onShortTap = onShortTapFinish,
             shape = RoundedCornerShape(
                 topStart = 0.dp, bottomStart = 0.dp,
                 topEnd = 10.dp, bottomEnd = 10.dp,
@@ -1036,11 +1184,12 @@ private fun PausableFinishRow(
 private fun FinishActionButton(
     finishConfirmationHold: Boolean,
     onFinish: () -> Unit,
+    onShortTap: () -> Unit,
     shape: Shape,
     modifier: Modifier = Modifier,
 ) {
     if (finishConfirmationHold) {
-        HoldToFinishButton(onFinish = onFinish, shape = shape, modifier = modifier)
+        HoldToFinishButton(onFinish = onFinish, onShortTap = onShortTap, shape = shape, modifier = modifier)
     } else {
         Button(
             onClick = onFinish,
@@ -1072,6 +1221,7 @@ private fun FinishActionButton(
 @Composable
 private fun HoldToFinishButton(
     onFinish: () -> Unit,
+    onShortTap: () -> Unit,
     shape: Shape,
     modifier: Modifier = Modifier,
 ) {
@@ -1084,7 +1234,7 @@ private fun HoldToFinishButton(
         modifier = modifier
             .clip(shape)
             .background(ColorPrimary)
-            .pointerInput(onFinish) {
+            .pointerInput(onFinish, onShortTap) {
                 detectTapGestures(
                     onPress = {
                         var completed = false
@@ -1102,6 +1252,9 @@ private fun HoldToFinishButton(
                         tryAwaitRelease()
                         if (!completed) {
                             fill.cancel()
+                            // Быстрый тап (отпущено за ~350 мс) — пользователь ждал
+                            // мгновенного завершения; подсказываем, что нужно удержание.
+                            if (progress.value < 0.12f) onShortTap()
                             scope.launch { progress.animateTo(0f, tween(250)) }
                         }
                     },

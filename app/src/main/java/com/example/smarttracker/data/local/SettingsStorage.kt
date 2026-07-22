@@ -31,6 +31,11 @@ data class AppSettings(
      */
     val finishConfirmationHold: Boolean = true,
     /**
+     * Служебный флаг (не в UI настроек): показан ли одноразовый onboarding-coachmark
+     * при первом входе в активную тренировку. Ставится в true по кнопке «Понятно».
+     */
+    val workoutCoachmarkShown: Boolean = false,
+    /**
      * Сохранённые BLE-пульсометры. Пустой список = датчики не настроены
      * (гейт HR-бейджа и StatItem «Пульс»). Отдельного toggle нет:
      * список непуст = включено.
@@ -99,6 +104,9 @@ interface SettingsStorage {
 
     /** true — завершение по удержанию 3 сек, false — по обычному тапу. */
     suspend fun setFinishConfirmationHold(enabled: Boolean)
+
+    /** Отметить onboarding-coachmark тренировки как показанный (кнопка «Понятно»). */
+    suspend fun setWorkoutCoachmarkShown(shown: Boolean)
 
     /**
      * Добавить пульсометр в список (или обновить имя существующего)
