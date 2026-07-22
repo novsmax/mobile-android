@@ -261,9 +261,11 @@ fun WorkoutStartScreen(
     val summary = state.summaryOverlay
     val overlayVisible = summary != null
     val isFullscreen = state.isMapFullscreen
-    // Onboarding-coachmark виден при первом входе в активную фазу (до дисмисса).
-    val coachmarkVisible = state.isWorkoutStarted && !state.coachmarkShown &&
-        !overlayVisible && !isFullscreen
+    // Onboarding-coachmark: авто-показ при первом входе в активную фазу (до дисмисса)
+    // ИЛИ принудительно по кнопке справки в хедере ([coachmarkForced]).
+    var coachmarkForced by remember { mutableStateOf(false) }
+    val coachmarkVisible = !overlayVisible && !isFullscreen &&
+        (coachmarkForced || (state.isWorkoutStarted && !state.coachmarkShown))
 
     // ── Scrubbing трека ──────────────────────────────────────────────────────────
     // Сбрасывается в 1f каждый раз, когда открывается новый оверлей итогов:
@@ -332,8 +334,13 @@ fun WorkoutStartScreen(
     var finishHintTrigger by remember { mutableIntStateOf(0) }
     var finishHintVisible by remember { mutableStateOf(false) }
 
-    // Bounds кнопки «Завершить» в координатах окна — для spotlight-выреза в coachmark.
+    // Bounds контролов в координатах окна — для spotlight-выреза в coachmark
+    // (шаг 1 — «Завершить», шаг 2 — GPS-бейдж, шаг 3 — HR-бейдж).
     var finishButtonBounds by remember { mutableStateOf<Rect?>(null) }
+    var gpsBadgeBounds by remember { mutableStateOf<Rect?>(null) }
+    var hrBadgeBounds by remember { mutableStateOf<Rect?>(null) }
+    // Текущий шаг многошагового онбординга (0-based).
+    var coachmarkStep by remember { mutableIntStateOf(0) }
     LaunchedEffect(finishHintTrigger) {
         if (finishHintTrigger > 0) {
             finishHintVisible = true
@@ -402,7 +409,10 @@ fun WorkoutStartScreen(
                     } else null,
                 )
             } else {
-                ActiveHeader(dateDisplay = state.currentDate)
+                ActiveHeader(
+                    dateDisplay = state.currentDate,
+                    onHelpClick = { coachmarkStep = 0; coachmarkForced = true },
+                )
             }
         }
         HorizontalDivider(color = ColorPrimary, thickness = 1.dp)
@@ -572,6 +582,7 @@ fun WorkoutStartScreen(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
+                        .onGloballyPositioned { gpsBadgeBounds = it.boundsInWindow() }
                         // Кликаем по бейджу → recenter карты на текущую позицию.
                         // clip обязателен ПЕРЕД clickable: иначе ripple-эффект
                         // выходит за круглую форму бейджа (рисуется на прямоугольнике).
@@ -602,17 +613,18 @@ fun WorkoutStartScreen(
                 }
             }
 
-            // ── HR-бейдж — под GPS-бейджем, только если пульсометр настроен ────
-            // Статусный: зелёный = датчик подключён, красный = нет. Значение
-            // пульса здесь НЕ показывается — оно уже есть в ряду статистики
-            // (StatItem «Пульс»). Тап открывает ОВЕРЛЕЙ «Датчики» поверх экрана
-            // (SensorsOverlay в WorkoutHomeScreen) — быстрый путь к
-            // переподключению; навигация с живой карты запрещена (нюанс 36).
-            if (!overlayVisible && state.hrmConfigured) {
+            // ── HR-бейдж — под GPS-бейджем, виден всегда (как GPS), гейт — настройка
+            // «Бейдж пульса» (дефолт вкл). Статусный: зелёный = датчик подключён,
+            // красный = нет связи. Значение пульса здесь НЕ показывается — оно уже
+            // есть в ряду статистики (StatItem «Пульс»). Тап открывает ОВЕРЛЕЙ
+            // «Датчики» поверх экрана (SensorsOverlay в WorkoutHomeScreen) — быстрый
+            // путь к подключению; навигация с живой карты запрещена (нюанс 36).
+            if (!overlayVisible && state.showHrBadge) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 48.dp, end = 8.dp)
+                        .onGloballyPositioned { hrBadgeBounds = it.boundsInWindow() }
                         // clip ПЕРЕД clickable — иначе ripple рисуется на прямоугольнике
                         .clip(RoundedCornerShape(size = 32.dp))
                         .clickable { onOpenSensors() }
@@ -636,6 +648,32 @@ fun WorkoutStartScreen(
                         } else {
                             stringResource(R.string.hrm_badge_disconnected)
                         },
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            // ── Демо-HR-бейдж во время онбординга (шаг 3) ────────────────────
+            // Если бейдж выключен в настройках, на экране его нет — показываем
+            // копию на штатном месте (под GPS-бейджем), чтобы вырез+стрелка
+            // coachmark указывали на контрол (как с GPS-бейджем).
+            if (!overlayVisible && coachmarkVisible && coachmarkStep == 2 && !state.showHrBadge) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 48.dp, end = 8.dp)
+                        .onGloballyPositioned { hrBadgeBounds = it.boundsInWindow() }
+                        .clip(RoundedCornerShape(size = 32.dp))
+                        .border(1.dp, ColorPrimary, RoundedCornerShape(size = 32.dp))
+                        .width(32.dp)
+                        .height(32.dp)
+                        .background(ColorGpsActive, RoundedCornerShape(size = 32.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Favorite,
+                        contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(18.dp),
                     )
@@ -699,7 +737,7 @@ fun WorkoutStartScreen(
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                         onFinishBoundsChanged = { finishButtonBounds = it },
-                        demoFill = coachmarkVisible,
+                        demoFill = coachmarkVisible && coachmarkStep == 0,
                     )
                 } else {
                     PausableFinishRow(
@@ -710,7 +748,7 @@ fun WorkoutStartScreen(
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                         onFinishBoundsChanged = { finishButtonBounds = it },
-                        demoFill = coachmarkVisible,
+                        demoFill = coachmarkVisible && coachmarkStep == 0,
                     )
                 }
 
@@ -753,9 +791,20 @@ fun WorkoutStartScreen(
         // ── Onboarding-coachmark: одноразовый при первом входе в активную фазу ──
         if (coachmarkVisible) {
             WorkoutCoachmark(
+                step = coachmarkStep,
+                stepCount = COACHMARK_STEPS,
                 finishConfirmationHold = state.finishConfirmationHold,
+                finishAvailable = state.isWorkoutStarted,
                 finishButtonBounds = finishButtonBounds,
-                onDismiss = onCoachmarkDismissed,
+                gpsBadgeBounds = gpsBadgeBounds,
+                hrBadgeBounds = hrBadgeBounds,
+                onNext = { coachmarkStep++ },
+                onBack = { if (coachmarkStep > 0) coachmarkStep-- },
+                onDismiss = {
+                    coachmarkStep = 0
+                    coachmarkForced = false
+                    onCoachmarkDismissed()
+                },
             )
         }
     } // конец Box-обёртки
@@ -870,7 +919,7 @@ fun WorkoutStartScreen(
 // ── Шапки ─────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ActiveHeader(dateDisplay: String) {
+private fun ActiveHeader(dateDisplay: String, onHelpClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -880,6 +929,17 @@ private fun ActiveHeader(dateDisplay: String) {
         Text(
             text = dateDisplay,
             style = WorkoutTextStyles.screenHeaderDate,
+        )
+        // Кнопка справки (левый угол хедера) — открывает онбординг в любой момент.
+        Image(
+            painter = painterResource(id = R.drawable.ic_help),
+            contentDescription = "Справка",
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 12.dp)
+                .size(24.dp)
+                .clip(RoundedCornerShape(percent = 50))
+                .clickable(onClick = onHelpClick),
         )
     }
 }
@@ -1038,54 +1098,69 @@ private fun WorkoutTypeIcon(
     }
 }
 
+/** Число шагов онбординга: 1 — управление, 2 — GPS и карта, 3 — датчик пульса. */
+private const val COACHMARK_STEPS = 3
+
 /**
- * Ряд действий тренировки: левая вторичная кнопка (Пауза/Продолжить) + правая
- * «Завершить». Используется и в активной фазе (лево = «Пауза»), и на паузе
- * (лево = «Продолжить») — низ карты, `BottomCenter`.
+ * Многошаговый onboarding-coachmark при первом входе в активную тренировку.
  *
- * @param leftLabel текст левой кнопки, [onLeft] — её клик.
- * @param finishConfirmationHold правая кнопка требует удержания 3 сек (см.
- *   [FinishActionButton]).
- */
-/**
- * Одноразовый onboarding-coachmark при первом входе в активную тренировку.
- *
- * Скрим на весь экран + callout-карточка над рядом кнопок со стрелкой вниз,
- * указывающей на «Завершить» (правая кнопка). Объясняет неочевидные механики:
- * удержание «Завершить» (если включено), кнопки на паузе, автопаузу в настройках.
- * Тап по скриму или «Понятно» → [onDismiss] (персист, больше не показываем).
+ * Скрим на весь экран с вырезом-«дыркой» над контролом текущего шага (шаг 1 —
+ * «Завершить», шаг 2 — GPS-бейдж, шаг 3 — HR-бейдж): контрол светится сквозь
+ * затемнение, обведён и со стрелкой; callout-карточка рядом (над контролом снизу /
+ * под контролом сверху). Если контрол не на экране (напр. HR-бейдж без
+ * подключённого датчика) — карточка у низа без выреза. «Далее»/«Назад» листают
+ * шаги, «Понятно»/тап по скриму → [onDismiss] (персист).
  */
 @Composable
 private fun WorkoutCoachmark(
+    step: Int,
+    stepCount: Int,
     finishConfirmationHold: Boolean,
+    finishAvailable: Boolean,
     finishButtonBounds: Rect?,
+    gpsBadgeBounds: Rect?,
+    hrBadgeBounds: Rect?,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val density = LocalDensity.current
-    // Позиция/размер оверлея в окне — чтобы перевести bounds кнопки в локальные координаты.
     var origin by remember { mutableStateOf(Offset.Zero) }
     var overlaySize by remember { mutableStateOf(IntSize.Zero) }
 
-    // Прямоугольник «дырки» в локальных координатах оверлея (bounds кнопки + отступ).
+    val isLast = step >= stepCount - 1
+    val title = when (step) {
+        0 -> "Управление тренировкой"
+        1 -> "GPS и карта"
+        else -> "Датчик пульса"
+    }
+    // Контрол текущего шага + скругление дырки (Завершить — слева квадратная).
+    // Шаг 1 (Завершить) без активной фазы (справка из pre-start) не подсвечиваем —
+    // кнопки нет на экране, bounds протухшие.
+    val targetBounds = when (step) {
+        0 -> finishButtonBounds.takeIf { finishAvailable }
+        1 -> gpsBadgeBounds
+        else -> hrBadgeBounds
+    }
+    val squareLeft = step == 0
+    val cornerDp = if (step == 0) 12f else 18f
+
     val holePadPx = with(density) { 4.dp.toPx() }
-    val hole: Rect? = finishButtonBounds?.let {
+    val hole: Rect? = targetBounds?.let {
         Rect(
-            left = it.left - origin.x - holePadPx,
-            top = it.top - origin.y - holePadPx,
-            right = it.right - origin.x + holePadPx,
-            bottom = it.bottom - origin.y + holePadPx,
+            it.left - origin.x - holePadPx, it.top - origin.y - holePadPx,
+            it.right - origin.x + holePadPx, it.bottom - origin.y + holePadPx,
         )
     }
+    // Контрол в верхней половине (GPS-бейдж) → карточка снизу, стрелка вверх; иначе наоборот.
+    val targetAtTop = hole != null && hole.center.y < overlaySize.height / 2f
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned {
-                origin = it.positionInWindow()
-                overlaySize = it.size
-            },
+            .onGloballyPositioned { origin = it.positionInWindow(); overlaySize = it.size },
     ) {
-        // 1. Скрим с вырезом-«дыркой» над «Завершить» (BlendMode.Clear нужен offscreen-слой).
+        // 1. Скрим с вырезом-«дыркой» (BlendMode.Clear нужен offscreen-слой).
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -1093,60 +1168,62 @@ private fun WorkoutCoachmark(
         ) {
             drawRect(Color.Black.copy(alpha = 0.62f))
             hole?.let { h ->
-                // Углы как у кнопки «Завершить»: справа скруглены (topEnd/bottomEnd),
-                // слева квадратные (кнопка стыкуется с «Пауза»). drawRoundRect даёт
-                // одинаковые углы — поэтому Path из RoundRect с радиусами по углам.
-                val cr = CornerRadius(12.dp.toPx())
+                val cr = CornerRadius(cornerDp.dp.toPx())
+                val z = CornerRadius.Zero
                 val holePath = Path().apply {
                     addRoundRect(
                         RoundRect(
                             rect = h,
-                            topLeft = CornerRadius.Zero,
+                            topLeft = if (squareLeft) z else cr,
                             topRight = cr,
                             bottomRight = cr,
-                            bottomLeft = CornerRadius.Zero,
+                            bottomLeft = if (squareLeft) z else cr,
                         )
                     )
                 }
-                // Прорезаем дырку — под ней видна реальная подсвеченная кнопка.
                 drawPath(holePath, Color.Transparent, blendMode = BlendMode.Clear)
-                // Обводка-подсветка вокруг кнопки.
                 drawPath(
                     path = holePath,
                     color = ColorSecondary,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
                 )
-                // Стрелка-треугольник над дыркой, остриём вниз к кнопке.
+                // Стрелка к контролу: вниз (контрол снизу) или вверх (контрол сверху).
                 val cx = h.center.x
                 val gap = 10.dp.toPx()
                 val aw = 18.dp.toPx()
                 val ah = 12.dp.toPx()
-                val tipY = h.top - gap
-                drawPath(
-                    path = Path().apply {
-                        moveTo(cx - aw / 2, tipY - ah)
-                        lineTo(cx + aw / 2, tipY - ah)
-                        lineTo(cx, tipY)
-                        close()
-                    },
-                    color = ColorSecondary,
-                )
+                val arrow = Path().apply {
+                    if (targetAtTop) {
+                        val tipY = h.bottom + gap
+                        moveTo(cx - aw / 2, tipY + ah); lineTo(cx + aw / 2, tipY + ah); lineTo(cx, tipY)
+                    } else {
+                        val tipY = h.top - gap
+                        moveTo(cx - aw / 2, tipY - ah); lineTo(cx + aw / 2, tipY - ah); lineTo(cx, tipY)
+                    }
+                    close()
+                }
+                drawPath(arrow, ColorSecondary)
             }
         }
 
-        // 2. Ловушка тапа для дисмисса (тап где угодно — закрыть).
+        // 2. Ловушка тапа для дисмисса.
         Box(modifier = Modifier.fillMaxSize().clickable(onClick = onDismiss))
 
-        // 3. Карточка с советами — над дыркой (или у низа, если bounds ещё не измерены).
-        val cardBottomOffsetPx = if (hole != null) {
-            (hole.top - with(density) { 28.dp.toPx() } - overlaySize.height).toInt()
-        } else {
-            -with(density) { 90.dp.toPx() }.toInt()
+        // 3. Карточка: над контролом (снизу экрана) или под контролом (сверху экрана).
+        // Если подсвечивать нечего (напр. справка из pre-start — кнопки «Завершить»
+        // на экране нет) — центрируем как обычную модалку, а не жмём к низу.
+        val arrowZonePx = with(density) { 30.dp.toPx() }
+        val cardModifier = when {
+            hole == null -> Modifier.align(Alignment.Center)
+            targetAtTop -> Modifier
+                .align(Alignment.TopStart)
+                .offset { IntOffset(0, (hole.bottom + arrowZonePx).toInt()) }
+            else -> Modifier
+                .align(Alignment.BottomStart)
+                .offset { IntOffset(0, (hole.top - arrowZonePx - overlaySize.height).toInt()) }
         }
         Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset { IntOffset(0, cardBottomOffsetPx) }
+            modifier = cardModifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .clip(RoundedCornerShape(12.dp))
@@ -1154,25 +1231,108 @@ private fun WorkoutCoachmark(
                 .padding(16.dp),
         ) {
             Text(
-                text = "Управление тренировкой",
+                text = "${step + 1}/$stepCount  $title",
                 color = ColorPrimary,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(10.dp))
-            if (finishConfirmationHold) {
-                CoachmarkTip("Кнопку «Завершить» удерживайте 3 секунды — защита от случайного нажатия.")
+            when (step) {
+                0 -> {
+                    if (finishConfirmationHold) {
+                        CoachmarkTip("Кнопку «Завершить» удерживайте 3 секунды — защита от случайного нажатия.")
+                    }
+                    CoachmarkTip("На паузе доступны кнопки «Продолжить» и «Завершить».")
+                    CoachmarkTip("Автопаузу (авто-стоп при остановке) можно включить в Настройках.")
+                }
+                1 -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        GpsBadgeSample(active = true, label = "Сигнал есть")
+                        GpsBadgeSample(active = false, label = "Поиск сигнала")
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    CoachmarkTip("Нажмите на бейдж — карта центрируется на вашей позиции.")
+                    CoachmarkTip("На паузе карту можно свободно двигать.")
+                }
+                else -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        HrBadgeSample(connected = true, label = "128 уд/мин")
+                        HrBadgeSample(connected = false, label = "Нет связи")
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    CoachmarkTip("Нажмите на бейдж — откроется список датчиков.")
+                    CoachmarkTip("Бейдж можно скрыть в Настройках.")
+                }
             }
-            CoachmarkTip("На паузе доступны «Продолжить» и «Завершить».")
-            CoachmarkTip("Автопаузу (авто-стоп при остановке) можно включить в Настройках.")
             Spacer(Modifier.height(4.dp))
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.End),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = "Понятно", color = ColorPrimary, fontWeight = FontWeight.Bold)
+                // «Назад» — серая полупрозрачная, со второго шага и далее.
+                if (step > 0) {
+                    TextButton(onClick = onBack) {
+                        Text(text = "Назад", color = ColorPrimary.copy(alpha = 0.6f))
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = if (isLast) onDismiss else onNext) {
+                    Text(
+                        text = if (isLast) "Понятно" else "Далее",
+                        color = ColorPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
+    }
+}
+
+/** Мини-образец GPS-бейджа (как на карте) + подпись — для шага «GPS и карта». */
+@Composable
+private fun GpsBadgeSample(active: Boolean, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(if (active) ColorGpsActive else ColorGpsInactive)
+                .border(1.dp, ColorPrimary, RoundedCornerShape(28.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.gps),
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier.size(26.dp),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(text = label, color = ColorPrimary, fontSize = 13.sp)
+    }
+}
+
+/** Мини-образец HR-бейджа (как на карте) + подпись — для шага «Датчик пульса». */
+@Composable
+private fun HrBadgeSample(connected: Boolean, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(if (connected) ColorGpsActive else ColorGpsInactive)
+                .border(1.dp, ColorPrimary, RoundedCornerShape(28.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Favorite,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(text = label, color = ColorPrimary, fontSize = 13.sp)
     }
 }
 
@@ -1213,6 +1373,15 @@ private fun FinishHoldHint(visible: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Ряд действий тренировки: левая вторичная кнопка (Пауза/Продолжить) + правая
+ * «Завершить». Используется и в активной фазе (лево = «Пауза»), и на паузе
+ * (лево = «Продолжить») — низ карты, `BottomCenter`.
+ *
+ * @param leftLabel текст левой кнопки, [onLeft] — её клик.
+ * @param finishConfirmationHold правая кнопка требует удержания 3 сек (см.
+ *   [FinishActionButton]).
+ */
 @Composable
 private fun PausableFinishRow(
     leftLabel: String,
@@ -1328,6 +1497,8 @@ private fun HoldToFinishButton(
     // наглядно показывая механику удержания. Кнопка под скримом — жест не мешает.
     LaunchedEffect(demoFill) {
         if (demoFill) {
+            // Стартовая пауза 1.5с: не заполнять сразу — дать прочитать карточку.
+            delay(1500)
             while (isActive) {
                 progress.snapTo(0f)
                 progress.animateTo(1f, tween(holdDurationMs, easing = LinearEasing))
