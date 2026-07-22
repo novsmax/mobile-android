@@ -130,6 +130,7 @@ import com.example.smarttracker.presentation.workout.summary.StatsOverlayCard
 import com.example.smarttracker.presentation.workout.summary.SummaryBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import com.example.smarttracker.presentation.workout.summary.SummaryDetailsPanel
 import com.example.smarttracker.presentation.workout.summary.SummaryHeader
@@ -260,6 +261,9 @@ fun WorkoutStartScreen(
     val summary = state.summaryOverlay
     val overlayVisible = summary != null
     val isFullscreen = state.isMapFullscreen
+    // Onboarding-coachmark виден при первом входе в активную фазу (до дисмисса).
+    val coachmarkVisible = state.isWorkoutStarted && !state.coachmarkShown &&
+        !overlayVisible && !isFullscreen
 
     // ── Scrubbing трека ──────────────────────────────────────────────────────────
     // Сбрасывается в 1f каждый раз, когда открывается новый оверлей итогов:
@@ -695,6 +699,7 @@ fun WorkoutStartScreen(
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                         onFinishBoundsChanged = { finishButtonBounds = it },
+                        demoFill = coachmarkVisible,
                     )
                 } else {
                     PausableFinishRow(
@@ -705,6 +710,7 @@ fun WorkoutStartScreen(
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
                         onFinishBoundsChanged = { finishButtonBounds = it },
+                        demoFill = coachmarkVisible,
                     )
                 }
 
@@ -745,7 +751,7 @@ fun WorkoutStartScreen(
     }
 
         // ── Onboarding-coachmark: одноразовый при первом входе в активную фазу ──
-        if (state.isWorkoutStarted && !state.coachmarkShown && !overlayVisible && !isFullscreen) {
+        if (coachmarkVisible) {
             WorkoutCoachmark(
                 finishConfirmationHold = state.finishConfirmationHold,
                 finishButtonBounds = finishButtonBounds,
@@ -1216,6 +1222,7 @@ private fun PausableFinishRow(
     finishConfirmationHold: Boolean,
     modifier: Modifier = Modifier,
     onFinishBoundsChanged: (Rect) -> Unit = {},
+    demoFill: Boolean = false,
 ) {
     Row(
         modifier = modifier
@@ -1256,6 +1263,7 @@ private fun PausableFinishRow(
                 .weight(1f)
                 .height(50.dp)
                 .onGloballyPositioned { onFinishBoundsChanged(it.boundsInWindow()) },
+            demoFill = demoFill,
         )
     }
 }
@@ -1271,9 +1279,10 @@ private fun FinishActionButton(
     onShortTap: () -> Unit,
     shape: Shape,
     modifier: Modifier = Modifier,
+    demoFill: Boolean = false,
 ) {
     if (finishConfirmationHold) {
-        HoldToFinishButton(onFinish = onFinish, onShortTap = onShortTap, shape = shape, modifier = modifier)
+        HoldToFinishButton(onFinish = onFinish, onShortTap = onShortTap, shape = shape, modifier = modifier, demoFill = demoFill)
     } else {
         Button(
             onClick = onFinish,
@@ -1308,11 +1317,26 @@ private fun HoldToFinishButton(
     onShortTap: () -> Unit,
     shape: Shape,
     modifier: Modifier = Modifier,
+    demoFill: Boolean = false,
 ) {
     val holdDurationMs = 3000
     // Animatable.value — читаемый State: кадр анимации перерисовывает заполнение.
     val progress = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+
+    // Демо в coachmark: кнопка сама заполняется (3с) → пауза (2с) → снова,
+    // наглядно показывая механику удержания. Кнопка под скримом — жест не мешает.
+    LaunchedEffect(demoFill) {
+        if (demoFill) {
+            while (isActive) {
+                progress.snapTo(0f)
+                progress.animateTo(1f, tween(holdDurationMs, easing = LinearEasing))
+                delay(2000)
+            }
+        } else {
+            progress.snapTo(0f)
+        }
+    }
 
     Box(
         modifier = modifier
