@@ -4,7 +4,7 @@
 подробная документация по каждому файлу, каждому классу/интерфейсу и каждой функции.
 
 Документ сгенерирован автоматическим обходом всех Kotlin-файлов проекта (main, test, androidTest)
-по состоянию на 2026-07-22, коммит `551c454`, ветка `main`.
+по состоянию на 2026-07-22, коммит `68c6ff8`, ветка `main`.
 
 ---
 
@@ -667,6 +667,7 @@ UseCase регистрации нового пользователя с клие
   - `voiceCueIntervalKm: Int = 1` — частота км-подсказок;
   - `keepScreenOn: Boolean = false` — экономия батареи по умолчанию;
   - `finishConfirmationHold: Boolean = true` — завершение по удержанию кнопки «Завершить» 3 сек (защита от случайного нажатия); false → мгновенный тап;
+  - `workoutCoachmarkShown: Boolean = false` — служебный флаг (не в UI настроек): показан ли одноразовый onboarding-coachmark первого входа в тренировку;
   - `hrmDevices: List<SavedHrmDevice> = emptyList()` — сохранённые BLE-пульсометры (пусто = не настроены; отдельного toggle нет: список непуст = включено);
   - `hrmActiveAddress: String? = null` — адрес активного датчика (последний выбранный, к нему автоконнект);
   - `fun autoConnectAddress(): String? = hrmActiveAddress ?: hrmDevices.firstOrNull()?.address` — цель автоподключения (активный, иначе первый).
@@ -679,6 +680,7 @@ UseCase регистрации нового пользователя с клие
   - `suspend fun setVoiceCueIntervalKm(intervalKm: Int)` — значения вне `ALLOWED_VOICE_INTERVALS` приводятся к дефолту;
   - `suspend fun setKeepScreenOn(enabled: Boolean)`;
   - `suspend fun setFinishConfirmationHold(enabled: Boolean)`;
+  - `suspend fun setWorkoutCoachmarkShown(shown: Boolean)` — отметить onboarding-coachmark показанным;
   - `suspend fun addHrmDevice(address: String, name: String?)` — добавить/обновить имя в списке и сделать активным;
   - `suspend fun removeHrmDevice(address: String)` — удалить; активный сбрасывается если удалили его;
   - `suspend fun setActiveHrmDevice(address: String)` — переключить активный (тап по строке списка).
@@ -2277,7 +2279,9 @@ Composable-обработчик системных разрешений для G
 - `@Composable private fun StatItem(value, label, valueMinWidth)` — одна статистика с фиксированной минимальной шириной значения (от "прыжков" layout при смене длины числа).
 - `@Composable private fun WorkoutTypeIcon(iconModel, contentDescription, isActive, enabled, onClick)` — иконка типа активности 42dp с рамкой, активное состояние подсвечивается `ColorSecondary`.
 - `@Composable private fun PausableFinishRow(leftLabel, onLeft, onFinish, finishConfirmationHold, modifier)` — общий ряд низа карты: левая `OutlinedButton` (Пауза/Продолжить) + `FinishActionButton`. Используется и в активной фазе, и на паузе.
-- `@Composable private fun FinishActionButton(finishConfirmationHold, onFinish, shape, modifier)` — правая «Завершить»: `HoldToFinishButton` при `finishConfirmationHold`, иначе обычная `Button` (мгновенный тап).
+- `@Composable private fun FinishActionButton(finishConfirmationHold, onFinish, onShortTap, shape, modifier)` — правая «Завершить»: `HoldToFinishButton` при `finishConfirmationHold`, иначе обычная `Button` (мгновенный тап). `onShortTap` — короткий тап в hold-режиме (для хинта).
+- `@Composable private fun FinishHoldHint(visible, modifier)` — пилюля «Удерживайте 3 сек», выезжает справа (`slideInHorizontally`+fade), авто-скрывается 2.2с (LaunchedEffect по `finishHintTrigger`). Показывается на короткий тап «Завершить» (`HoldToFinishButton.onShortTap`: отпущено за ~350 мс, `progress<0.12`). Отдельный composable — вне вложенных Column/Box-скоупов `AnimatedVisibility` разрешается однозначно.
+- `@Composable private fun WorkoutCoachmark(finishConfirmationHold, onDismiss)` + `CoachmarkTip(text)` — одноразовый onboarding при первом входе в активную фазу (`isWorkoutStarted && !coachmarkShown && !overlayVisible && !isFullscreen`): скрим `Black α0.6` (тап → dismiss) + карточка «Управление тренировкой» (удержание Завершить, кнопки на паузе, автопауза в настройках) + стрелка `ArrowDropDown` + «Понятно» → `onCoachmarkDismissed` (персист `setWorkoutCoachmarkShown`). Корневой `Column` экрана обёрнут в `Box(fillMaxSize)` для оверлея.
 - `@Composable private fun HoldToFinishButton(onFinish, shape, modifier)` — кнопка «Завершить» с подтверждением по удержанию 3 сек: `detectTapGestures.onPress` запускает `Animatable` 0→1 (`tween(3000, LinearEasing)`), заполнение `ColorSecondary` растёт слева направо (`fillMaxWidth(progress)` у Box с `align(CenterStart)`); дошло до 1 → `onFinish()`; отпускание раньше → `fill.cancel()` + откат к 0 (`tween(250)`). Обычный тап НЕ срабатывает намеренно. Рисуется вместо обычной `Button` при `state.finishConfirmationHold` (иначе — мгновенный тап).
 - `@Composable private fun BatteryOptBanner(onConfigureClick)` — предупреждающий баннер (мягкий амбер) о том, что приложение не в Doze whitelist.
 Особенности/нюансы:
