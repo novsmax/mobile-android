@@ -645,83 +645,24 @@ fun WorkoutStartScreen(
                         }
                     }
                 } else if (!state.isTracking) {
-                    // На паузе: одна кнопка «Продолжить» (выбор активности уже
-                    // недоступен — тип не меняется в ходе тренировки).
-                    Button(
-                        onClick = onStartClick,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .height(50.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.workout_resume),
-                            style = WorkoutTextStyles.primaryButtonLabel,
-                            color = Color.White,
-                        )
-                    }
+                    // На паузе — те же две кнопки, что в активной фазе, только
+                    // слева «Продолжить» вместо «Пауза». Раньше была одна кнопка
+                    // «Продолжить», и завершить тренировку с паузы было нельзя.
+                    PausableFinishRow(
+                        leftLabel = stringResource(R.string.workout_resume),
+                        onLeft = onStartClick,
+                        onFinish = onFinishClick,
+                        finishConfirmationHold = state.finishConfirmationHold,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
                 } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .height(50.dp),
-                    ) {
-                        OutlinedButton(
-                            onClick = onPauseClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(50.dp),
-                            shape = RoundedCornerShape(
-                                topStart = 10.dp, bottomStart = 10.dp,
-                                topEnd = 0.dp, bottomEnd = 0.dp,
-                            ),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = Color.White,
-                                contentColor = ColorPrimary,
-                            ),
-                            border = BorderStroke(1.dp, ColorPrimary),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.workout_pause),
-                                style = WorkoutTextStyles.primaryButtonLabel,
-                                color = ColorPrimary,
-                            )
-                        }
-                        val finishShape = RoundedCornerShape(
-                            topStart = 0.dp, bottomStart = 0.dp,
-                            topEnd = 10.dp, bottomEnd = 10.dp,
-                        )
-                        if (state.finishConfirmationHold) {
-                            // Завершение по удержанию 3 сек — защита от случайного тапа.
-                            HoldToFinishButton(
-                                onFinish = onFinishClick,
-                                shape = finishShape,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(50.dp),
-                            )
-                        } else {
-                            Button(
-                                onClick = onFinishClick,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(50.dp),
-                                shape = finishShape,
-                                colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.workout_finish),
-                                    style = WorkoutTextStyles.primaryButtonLabel,
-                                    color = Color.White,
-                                )
-                            }
-                        }
-                    }
+                    PausableFinishRow(
+                        leftLabel = stringResource(R.string.workout_pause),
+                        onLeft = onPauseClick,
+                        onFinish = onFinishClick,
+                        finishConfirmationHold = state.finishConfirmationHold,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
                 }
             }
         }
@@ -1026,6 +967,93 @@ private fun WorkoutTypeIcon(
             error = painterResource(R.drawable.placeholder),
             modifier = Modifier.size(36.dp),
         )
+    }
+}
+
+/**
+ * Ряд действий тренировки: левая вторичная кнопка (Пауза/Продолжить) + правая
+ * «Завершить». Используется и в активной фазе (лево = «Пауза»), и на паузе
+ * (лево = «Продолжить») — низ карты, `BottomCenter`.
+ *
+ * @param leftLabel текст левой кнопки, [onLeft] — её клик.
+ * @param finishConfirmationHold правая кнопка требует удержания 3 сек (см.
+ *   [FinishActionButton]).
+ */
+@Composable
+private fun PausableFinishRow(
+    leftLabel: String,
+    onLeft: () -> Unit,
+    onFinish: () -> Unit,
+    finishConfirmationHold: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .height(50.dp),
+    ) {
+        OutlinedButton(
+            onClick = onLeft,
+            modifier = Modifier
+                .weight(1f)
+                .height(50.dp),
+            shape = RoundedCornerShape(
+                topStart = 10.dp, bottomStart = 10.dp,
+                topEnd = 0.dp, bottomEnd = 0.dp,
+            ),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = Color.White,
+                contentColor = ColorPrimary,
+            ),
+            border = BorderStroke(1.dp, ColorPrimary),
+        ) {
+            Text(
+                text = leftLabel,
+                style = WorkoutTextStyles.primaryButtonLabel,
+                color = ColorPrimary,
+            )
+        }
+        FinishActionButton(
+            finishConfirmationHold = finishConfirmationHold,
+            onFinish = onFinish,
+            shape = RoundedCornerShape(
+                topStart = 0.dp, bottomStart = 0.dp,
+                topEnd = 10.dp, bottomEnd = 10.dp,
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .height(50.dp),
+        )
+    }
+}
+
+/**
+ * Правая кнопка «Завершить»: по [finishConfirmationHold] — либо
+ * [HoldToFinishButton] (удержание 3 сек), либо обычная `Button` (мгновенный тап).
+ */
+@Composable
+private fun FinishActionButton(
+    finishConfirmationHold: Boolean,
+    onFinish: () -> Unit,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+) {
+    if (finishConfirmationHold) {
+        HoldToFinishButton(onFinish = onFinish, shape = shape, modifier = modifier)
+    } else {
+        Button(
+            onClick = onFinish,
+            modifier = modifier,
+            shape = shape,
+            colors = ButtonDefaults.buttonColors(containerColor = ColorPrimary),
+        ) {
+            Text(
+                text = stringResource(R.string.workout_finish),
+                style = WorkoutTextStyles.primaryButtonLabel,
+                color = Color.White,
+            )
+        }
     }
 }
 
