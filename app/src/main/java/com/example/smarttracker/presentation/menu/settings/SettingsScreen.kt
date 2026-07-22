@@ -37,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,6 +52,7 @@ import com.example.smarttracker.presentation.common.AppTab
 import com.example.smarttracker.presentation.common.SmartTrackerBottomBar
 import com.example.smarttracker.presentation.theme.ColorPrimary
 import com.example.smarttracker.presentation.theme.ColorSecondary
+import com.example.smarttracker.presentation.theme.SmartTrackerTheme
 import com.example.smarttracker.presentation.theme.geologicaFontFamily
 
 /**
@@ -75,26 +78,33 @@ fun SettingsScreen(
     onFinishConfirmationHoldChanged: (Boolean) -> Unit,
     onOpenSensors: () -> Unit,
 ) {
+    // В @Preview системных сервисов/TTS нет: getSystemService(AUDIO) может вернуть
+    // null (NPE на as AudioManager), а VoiceCueSamplePlayer поднимает TextToSpeech.
+    // Поэтому в inspection-режиме samplePlayer/audioManager = null с безопасными
+    // фолбэками — рантайм не меняется (там оба всегда ненулевые).
+    val inPreview = LocalInspectionMode.current
+
     // Пробный отыгрыш фразы при выборе громкости. Живёт в composition:
     // TTS-движок освобождается при уходе с экрана.
     val context = LocalContext.current
-    val samplePlayer = remember { VoiceCueSamplePlayer(context) }
+    val samplePlayer = if (inPreview) null else remember { VoiceCueSamplePlayer(context) }
     DisposableEffect(Unit) {
-        onDispose { samplePlayer.release() }
+        onDispose { samplePlayer?.release() }
     }
 
     // ── Громкость подсказок = системная громкость медиа (STREAM_MUSIC) ──────
     // Слайдер крутит её напрямую: одна ручка с кнопками громкости устройства,
     // отдельной настройки в DataStore нет — иначе две независимые громкости
     // расходились бы (см. KDoc AppSettings).
-    val audioManager = remember {
+    val audioManager = if (inPreview) null else remember {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
-    val maxMediaVolume = remember {
-        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    val maxMediaVolume = remember(audioManager) {
+        audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15
     }
     fun readMediaVolumeFraction(): Float =
-        audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxMediaVolume
+        audioManager?.let { it.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxMediaVolume }
+            ?: 0.5f
 
     var mediaVolumeFraction by remember { mutableFloatStateOf(readMediaVolumeFraction()) }
 
@@ -173,13 +183,13 @@ fun SettingsScreen(
                         // runCatching: setStreamVolume может бросить SecurityException
                         // в редких режимах DND — слайдер не должен ронять экран.
                         runCatching {
-                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, step, 0)
+                            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, step, 0)
                         }
                         // Фактическое значение после округления до системного шага.
                         mediaVolumeFraction = readMediaVolumeFraction()
                         // Короткий шаблон подсказки на только что выставленной
                         // громкости — пользователь сразу слышит, что выбрал.
-                        samplePlayer.play()
+                        samplePlayer?.play()
                     },
                 )
             }
@@ -411,5 +421,20 @@ private fun IntervalSelectorRow(
                 }
             }
         }
+    }
+}
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+
+@Preview(showBackground = true, name = "Настройки")
+@Composable
+private fun SettingsScreenPreview() {
+    SmartTrackerTheme {
+        SettingsScreen(
+            settings = AppSettings(voiceCuesEnabled = true, voiceCueIntervalKm = 2),
+            onBack = {}, onAutopauseChanged = {}, onVoiceCuesChanged = {},
+            onVoiceCueIntervalChanged = {}, onKeepScreenOnChanged = {},
+            onFinishConfirmationHoldChanged = {}, onOpenSensors = {},
+        )
     }
 }
