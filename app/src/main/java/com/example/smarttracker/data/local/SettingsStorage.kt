@@ -31,14 +31,21 @@ data class AppSettings(
      */
     val finishConfirmationHold: Boolean = true,
     /**
+     * Показывать бейдж пульса поверх карты (индикатор состояния датчика, как
+     * GPS-бейдж: зелёный — подключён, красный — нет связи). Дефолт true — виден
+     * сразу, тап открывает список датчиков. Выключается тумблером в Настройках.
+     * От наличия датчика НЕ зависит (в отличие от StatItem «Пульс»).
+     */
+    val showHeartRateBadge: Boolean = true,
+    /**
      * Служебный флаг (не в UI настроек): показан ли одноразовый onboarding-coachmark
      * при первом входе в активную тренировку. Ставится в true по кнопке «Понятно».
      */
     val workoutCoachmarkShown: Boolean = false,
     /**
      * Сохранённые BLE-пульсометры. Пустой список = датчики не настроены
-     * (гейт HR-бейджа и StatItem «Пульс»). Отдельного toggle нет:
-     * список непуст = включено.
+     * (гейт StatItem «Пульс» и автоподключения). Бейдж пульса гейтится отдельно
+     * — [showHeartRateBadge]. Отдельного toggle списка нет: непуст = включено.
      */
     val hrmDevices: List<SavedHrmDevice> = emptyList(),
     /**
@@ -104,6 +111,9 @@ interface SettingsStorage {
 
     /** true — завершение по удержанию 3 сек, false — по обычному тапу. */
     suspend fun setFinishConfirmationHold(enabled: Boolean)
+
+    /** true — бейдж пульса виден поверх карты, false — скрыт. */
+    suspend fun setShowHeartRateBadge(enabled: Boolean)
 
     /** Отметить onboarding-coachmark тренировки как показанный (кнопка «Понятно»). */
     suspend fun setWorkoutCoachmarkShown(shown: Boolean)

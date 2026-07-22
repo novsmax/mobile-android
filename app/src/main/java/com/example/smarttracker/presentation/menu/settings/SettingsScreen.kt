@@ -76,6 +76,7 @@ fun SettingsScreen(
     onVoiceCueIntervalChanged: (Int) -> Unit,
     onKeepScreenOnChanged: (Boolean) -> Unit,
     onFinishConfirmationHoldChanged: (Boolean) -> Unit,
+    onShowHeartRateBadgeChanged: (Boolean) -> Unit,
     onOpenSensors: () -> Unit,
 ) {
     // В @Preview системных сервисов/TTS нет: getSystemService(AUDIO) может вернуть
@@ -220,6 +221,12 @@ fun SettingsScreen(
                     }
                 },
                 onClick = onOpenSensors,
+            )
+            SwitchRow(
+                title = "Бейдж пульса",
+                subtitle = "Индикатор датчика поверх карты (зелёный — подключён)",
+                checked = settings.showHeartRateBadge,
+                onCheckedChange = onShowHeartRateBadgeChanged,
             )
             Spacer(modifier = Modifier.height(24.dp))
         }
@@ -434,7 +441,8 @@ private fun SettingsScreenPreview() {
             settings = AppSettings(voiceCuesEnabled = true, voiceCueIntervalKm = 2),
             onBack = {}, onAutopauseChanged = {}, onVoiceCuesChanged = {},
             onVoiceCueIntervalChanged = {}, onKeepScreenOnChanged = {},
-            onFinishConfirmationHoldChanged = {}, onOpenSensors = {},
+            onFinishConfirmationHoldChanged = {}, onShowHeartRateBadgeChanged = {},
+            onOpenSensors = {},
         )
     }
 }

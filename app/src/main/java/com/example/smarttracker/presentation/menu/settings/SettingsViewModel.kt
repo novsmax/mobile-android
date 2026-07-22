@@ -52,4 +52,8 @@ class SettingsViewModel @Inject constructor(
     fun onFinishConfirmationHoldChanged(enabled: Boolean) {
         viewModelScope.launch { settingsStorage.setFinishConfirmationHold(enabled) }
     }
+
+    fun onShowHeartRateBadgeChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsStorage.setShowHeartRateBadge(enabled) }
+    }
 }

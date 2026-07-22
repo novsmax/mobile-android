@@ -174,10 +174,16 @@ class WorkoutStartViewModel @Inject constructor(
          */
         val coachmarkShown: Boolean = false,
         /**
-         * Пульсометр настроен (адрес сохранён в настройках). Гейт HR-бейджа
-         * и StatItem «Пульс»: без датчика ряд статов остаётся из трёх элементов.
+         * Пульсометр настроен (адрес сохранён в настройках). Гейт StatItem «Пульс»:
+         * без датчика ряд статов остаётся из трёх элементов. Бейдж пульса гейтится
+         * отдельно — [showHrBadge].
          */
         val hrmConfigured: Boolean = false,
+        /**
+         * Показывать бейдж пульса поверх карты (настройка, дефолт вкл). Не зависит
+         * от наличия датчика — красный бейдж без подключения ведёт к списку датчиков.
+         */
+        val showHrBadge: Boolean = true,
         /** Соединение с пульсометром активно (для цвета бейджа). */
         val hrmConnected: Boolean = false,
         /** Живой пульс для StatItem: "148" или "--" когда данных нет. */
@@ -288,6 +294,7 @@ class WorkoutStartViewModel @Inject constructor(
                         finishConfirmationHold = s.finishConfirmationHold,
                         coachmarkShown = s.workoutCoachmarkShown,
                         hrmConfigured = s.hrmDevices.isNotEmpty(),
+                        showHrBadge = s.showHeartRateBadge,
                     )
                 }
                 val address = s.autoConnectAddress()

@@ -43,6 +43,7 @@ class SettingsStorageImpl @Inject constructor(
         val VOICE_CUE_INTERVAL_KM = intPreferencesKey("voice_cue_interval_km")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val FINISH_CONFIRMATION_HOLD = booleanPreferencesKey("finish_confirmation_hold")
+        val SHOW_HR_BADGE = booleanPreferencesKey("show_hr_badge")
         val WORKOUT_COACHMARK_SHOWN = booleanPreferencesKey("workout_coachmark_shown")
 
         /** JSON-список сохранённых пульсометров ([encodeHrmDevices]). */
@@ -81,6 +82,8 @@ class SettingsStorageImpl @Inject constructor(
                 keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: defaults.keepScreenOn,
                 finishConfirmationHold = prefs[Keys.FINISH_CONFIRMATION_HOLD]
                     ?: defaults.finishConfirmationHold,
+                showHeartRateBadge = prefs[Keys.SHOW_HR_BADGE]
+                    ?: defaults.showHeartRateBadge,
                 workoutCoachmarkShown = prefs[Keys.WORKOUT_COACHMARK_SHOWN]
                     ?: defaults.workoutCoachmarkShown,
                 hrmDevices = readHrmDevices(prefs),
@@ -113,6 +116,10 @@ class SettingsStorageImpl @Inject constructor(
 
     override suspend fun setFinishConfirmationHold(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.FINISH_CONFIRMATION_HOLD] = enabled }
+    }
+
+    override suspend fun setShowHeartRateBadge(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.SHOW_HR_BADGE] = enabled }
     }
 
     override suspend fun setWorkoutCoachmarkShown(shown: Boolean) {
