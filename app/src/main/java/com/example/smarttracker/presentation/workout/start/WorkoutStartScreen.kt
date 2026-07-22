@@ -13,12 +13,14 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,7 +44,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -83,15 +84,28 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.smarttracker.R
@@ -312,6 +326,9 @@ fun WorkoutStartScreen(
     // Инкремент триггера (из onShortTapFinish) перезапускает таймер авто-скрытия.
     var finishHintTrigger by remember { mutableIntStateOf(0) }
     var finishHintVisible by remember { mutableStateOf(false) }
+
+    // Bounds кнопки «Завершить» в координатах окна — для spotlight-выреза в coachmark.
+    var finishButtonBounds by remember { mutableStateOf<Rect?>(null) }
     LaunchedEffect(finishHintTrigger) {
         if (finishHintTrigger > 0) {
             finishHintVisible = true
@@ -676,6 +693,7 @@ fun WorkoutStartScreen(
                         onShortTapFinish = { finishHintTrigger++ },
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
+                        onFinishBoundsChanged = { finishButtonBounds = it },
                     )
                 } else {
                     PausableFinishRow(
@@ -685,6 +703,7 @@ fun WorkoutStartScreen(
                         onShortTapFinish = { finishHintTrigger++ },
                         finishConfirmationHold = state.finishConfirmationHold,
                         modifier = Modifier.align(Alignment.BottomCenter),
+                        onFinishBoundsChanged = { finishButtonBounds = it },
                     )
                 }
 
@@ -728,6 +747,7 @@ fun WorkoutStartScreen(
         if (state.isWorkoutStarted && !state.coachmarkShown && !overlayVisible && !isFullscreen) {
             WorkoutCoachmark(
                 finishConfirmationHold = state.finishConfirmationHold,
+                finishButtonBounds = finishButtonBounds,
                 onDismiss = onCoachmarkDismissed,
             )
         }
@@ -1031,58 +1051,107 @@ private fun WorkoutTypeIcon(
 @Composable
 private fun WorkoutCoachmark(
     finishConfirmationHold: Boolean,
+    finishButtonBounds: Rect?,
     onDismiss: () -> Unit,
 ) {
+    val density = LocalDensity.current
+    // Позиция/размер оверлея в окне — чтобы перевести bounds кнопки в локальные координаты.
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var overlaySize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Прямоугольник «дырки» в локальных координатах оверлея (bounds кнопки + отступ).
+    val holePadPx = with(density) { 4.dp.toPx() }
+    val hole: Rect? = finishButtonBounds?.let {
+        Rect(
+            left = it.left - origin.x - holePadPx,
+            top = it.top - origin.y - holePadPx,
+            right = it.right - origin.x + holePadPx,
+            bottom = it.bottom - origin.y + holePadPx,
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.6f))
-            .clickable(onClick = onDismiss),
-        contentAlignment = Alignment.BottomCenter,
+            .onGloballyPositioned {
+                origin = it.positionInWindow()
+                overlaySize = it.size
+            },
     ) {
+        // 1. Скрим с вырезом-«дыркой» над «Завершить» (BlendMode.Clear нужен offscreen-слой).
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
+        ) {
+            drawRect(Color.Black.copy(alpha = 0.62f))
+            hole?.let { h ->
+                val r = CornerRadius(10.dp.toPx())
+                // Прорезаем дырку — под ней видна реальная подсвеченная кнопка.
+                drawRoundRect(Color.Transparent, h.topLeft, h.size, r, blendMode = BlendMode.Clear)
+                // Обводка-подсветка вокруг кнопки.
+                drawRoundRect(
+                    color = ColorSecondary,
+                    topLeft = h.topLeft,
+                    size = h.size,
+                    cornerRadius = r,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                )
+                // Стрелка-треугольник над дыркой, остриём вниз к кнопке.
+                val cx = h.center.x
+                val gap = 10.dp.toPx()
+                val aw = 18.dp.toPx()
+                val ah = 12.dp.toPx()
+                val tipY = h.top - gap
+                drawPath(
+                    path = Path().apply {
+                        moveTo(cx - aw / 2, tipY - ah)
+                        lineTo(cx + aw / 2, tipY - ah)
+                        lineTo(cx, tipY)
+                        close()
+                    },
+                    color = ColorSecondary,
+                )
+            }
+        }
+
+        // 2. Ловушка тапа для дисмисса (тап где угодно — закрыть).
+        Box(modifier = Modifier.fillMaxSize().clickable(onClick = onDismiss))
+
+        // 3. Карточка с советами — над дыркой (или у низа, если bounds ещё не измерены).
+        val cardBottomOffsetPx = if (hole != null) {
+            (hole.top - with(density) { 28.dp.toPx() } - overlaySize.height).toInt()
+        } else {
+            -with(density) { 90.dp.toPx() }.toInt()
+        }
         Column(
             modifier = Modifier
+                .align(Alignment.BottomStart)
+                .offset { IntOffset(0, cardBottomOffsetPx) }
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 74.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White)
+                .padding(16.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White)
-                    .padding(16.dp),
-            ) {
-                Text(
-                    text = "Управление тренировкой",
-                    color = ColorPrimary,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(10.dp))
-                if (finishConfirmationHold) {
-                    CoachmarkTip("Кнопку «Завершить» удерживайте 3 секунды — защита от случайного нажатия.")
-                }
-                CoachmarkTip("На паузе доступны «Продолжить» и «Завершить».")
-                CoachmarkTip("Автопаузу (авто-стоп при остановке) можно включить в Настройках.")
-                Spacer(Modifier.height(4.dp))
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(Alignment.End),
-                ) {
-                    Text(text = "Понятно", color = ColorPrimary, fontWeight = FontWeight.Bold)
-                }
+            Text(
+                text = "Управление тренировкой",
+                color = ColorPrimary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            if (finishConfirmationHold) {
+                CoachmarkTip("Кнопку «Завершить» удерживайте 3 секунды — защита от случайного нажатия.")
             }
-            // Стрелка-указатель к правой кнопке «Завершить» (~75% ширины ряда).
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.weight(3f))
-                Icon(
-                    imageVector = Icons.Filled.ArrowDropDown,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp),
-                )
-                Spacer(Modifier.weight(1f))
+            CoachmarkTip("На паузе доступны «Продолжить» и «Завершить».")
+            CoachmarkTip("Автопаузу (авто-стоп при остановке) можно включить в Настройках.")
+            Spacer(Modifier.height(4.dp))
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(text = "Понятно", color = ColorPrimary, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1133,6 +1202,7 @@ private fun PausableFinishRow(
     onShortTapFinish: () -> Unit,
     finishConfirmationHold: Boolean,
     modifier: Modifier = Modifier,
+    onFinishBoundsChanged: (Rect) -> Unit = {},
 ) {
     Row(
         modifier = modifier
@@ -1171,7 +1241,8 @@ private fun PausableFinishRow(
             ),
             modifier = Modifier
                 .weight(1f)
-                .height(50.dp),
+                .height(50.dp)
+                .onGloballyPositioned { onFinishBoundsChanged(it.boundsInWindow()) },
         )
     }
 }
