@@ -16,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -146,6 +147,15 @@ fun MapViewComposable(
     snapshotRequest: Int = 0,
     onSnapshot: ((android.graphics.Bitmap) -> Unit)? = null,
 ) {
+    // В @Preview (Android Studio) MapLibre не инициализирован и MapView во
+    // AndroidView не рендерится — без этой заглушки любой экран с картой не
+    // открылся бы в превью. Рантайм не затрагивается (нюансы 34/36): ветка
+    // только для LocalInspectionMode. Переиспользуем чистый OfflineMapFallback.
+    if (LocalInspectionMode.current) {
+        OfflineMapFallback(currentLocation = currentLocation, modifier = modifier)
+        return
+    }
+
     // Когда тайлы недоступны — показываем текстовый fallback, карту не создаём
     if (mapTilesFailed) {
         OfflineMapFallback(currentLocation = currentLocation, modifier = modifier)
