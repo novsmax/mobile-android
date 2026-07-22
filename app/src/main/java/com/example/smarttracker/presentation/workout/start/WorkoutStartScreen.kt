@@ -81,6 +81,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -158,9 +159,13 @@ fun WorkoutStartScreen(
     // false → Android Doze будет throttle'ить GPS-обновления при выключенном экране.
     // Состояние локальное (не в VM): нужно только для баннера на этом экране,
     // нет других потребителей. При наличии других — перенести в WorkoutStartViewModel.UiState.
+    // В @Preview системные сервисы недоступны (power_exemption/permission бросают
+    // в layoutlib) — гейтим все обращения к ним по LocalInspectionMode с безопасными
+    // дефолтами. Рантайм не меняется (inPreview всегда false вне preview-хоста).
+    val inPreview = LocalInspectionMode.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var batteryOptimized by remember {
-        mutableStateOf(BatteryOptimizationHelper.isIgnoringBatteryOptimizations(ctx))
+        mutableStateOf(if (inPreview) true else BatteryOptimizationHelper.isIgnoringBatteryOptimizations(ctx))
     }
     // Обновляем статус при возврате из системных настроек (юзер мог нажать "Разрешить"
     // в системном диалоге Doze whitelist). ON_RESUME — стандартный hook для перепроверки
@@ -168,7 +173,7 @@ fun WorkoutStartScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
+            if (event == Lifecycle.Event.ON_RESUME && !inPreview) {
                 batteryOptimized = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(ctx)
             }
         }
@@ -190,21 +195,25 @@ fun WorkoutStartScreen(
     // обычно уже есть), true приходит из onLocationGranted когда юзер согласится.
     var locationPermissionGranted by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                ctx, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED ||
+            inPreview ||
+                ContextCompat.checkSelfPermission(
+                    ctx, Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED ||
                 ContextCompat.checkSelfPermission(
                     ctx, Manifest.permission.ACCESS_COARSE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED
         )
     }
 
-    // Запрашиваем разрешения при открытии экрана.
-    LocationPermissionHandler(
-        onLocationGranted   = { locationPermissionGranted = true },
-        onPermissionsResult = { /* обработка в сервисе */ },
-        onBatteryOptResult  = { granted -> batteryOptimized = granted },
-    )
+    // Запрашиваем разрешения при открытии экрана (в preview не нужно — launcher'ы
+    // и permission-проверки в inspection-контексте только мешают рендеру).
+    if (!inPreview) {
+        LocationPermissionHandler(
+            onLocationGranted   = { locationPermissionGranted = true },
+            onPermissionsResult = { /* обработка в сервисе */ },
+            onBatteryOptResult  = { granted -> batteryOptimized = granted },
+        )
+    }
 
     // Локальное состояние шторки выбора активности — чисто UI, не нужно в ViewModel
     var showTypeSelector by remember { mutableStateOf(false) }
